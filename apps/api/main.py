@@ -1,0 +1,163 @@
+# The entry point of the FastAPI application. Creates the app, adds middleware, registers exception handlers, includes routers, and exposes the /health endpoint.
+
+import asyncio
+import logging
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+
+from core.config import settings
+from core.exceptions import AppError
+from core.logging import get_request_id, setup_logging, LoggingASGIMiddleware
+
+# Initialize structured logging
+setup_logging(log_level="DEBUG" if settings.DEBUG else "INFO")
+logger = logging.getLogger("main")
+
+# Instantiate FastAPI application
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="AetherOS Core API Server",
+    debug=settings.DEBUG,
+)
+
+# Register CORS middleware (locked to known origins from settings)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register ASGI logging middleware to propagate request context
+app.add_middleware(LoggingASGIMiddleware)
+
+# Register Exception Handlers
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    request_id = get_request_id()
+    logger.warning(
+        f"Application error: {exc.code} - {exc.message}",
+        extra={"code": exc.code, "details": exc.details}
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "request_id": request_id,
+                "details": exc.details
+            }
+        }
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    request_id = get_request_id()
+    errors = exc.errors()
+    message = "Request validation failed"
+    if errors:
+        msg = errors[0].get("msg")
+        loc = ".".join(str(l) for l in errors[0].get("loc", []))
+        message = f"Validation failed: {msg} at {loc}"
+
+    logger.warning(
+        f"Validation error: {message}",
+        extra={"errors": errors}
+    )
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": message,
+                "request_id": request_id,
+                "details": {"errors": errors}
+            }
+        }
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = get_request_id()
+    logger.exception(f"Unhandled system error: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected error occurred. Please contact support.",
+                "request_id": request_id
+            }
+        }
+    )
+
+# Health endpoint (Checks DB + Redis + Qdrant connectivity, degrading gracefully)
+@app.get("/health")
+async def health_check():
+    db_status = "healthy"
+    redis_status = "healthy"
+    qdrant_status = "healthy"
+
+    # 1. Check DB Connectivity
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+
+        engine = create_async_engine(settings.DATABASE_URL)
+        
+        async def check_db():
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        
+        await asyncio.wait_for(check_db(), timeout=2.0)
+        await engine.dispose()
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+        logger.error(f"Health Check: Database connection failed: {str(e)}")
+
+    # 2. Check Redis Connectivity
+    try:
+        import redis.asyncio as aioredis
+        
+        r = aioredis.from_url(settings.REDIS_URL, socket_timeout=2.0)
+        await asyncio.wait_for(r.ping(), timeout=2.0)
+        await r.close()
+    except Exception as e:
+        redis_status = f"unhealthy: {str(e)}"
+        logger.error(f"Health Check: Redis connection failed: {str(e)}")
+
+    # 3. Check Qdrant Connectivity
+    try:
+        from qdrant_client import AsyncQdrantClient
+
+        if settings.QDRANT_URL:
+            qc = AsyncQdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=2.0)
+            await asyncio.wait_for(qc.get_collections(), timeout=2.0)
+            if hasattr(qc, "close"):
+                await qc.close()
+        else:
+            qdrant_status = "unhealthy: QDRANT_URL not configured"
+    except Exception as e:
+        qdrant_status = f"unhealthy: {str(e)}"
+        logger.error(f"Health Check: Qdrant connection failed: {str(e)}")
+
+    # Determine overall status
+    overall_status = "healthy"
+    if "unhealthy" in db_status or "unhealthy" in redis_status or "unhealthy" in qdrant_status:
+        overall_status = "degraded"
+
+    return {
+        "status": overall_status,
+        "dependencies": {
+            "database": db_status,
+            "redis": redis_status,
+            "qdrant": qdrant_status
+        }
+    }
+
+# Mount Empty Routers (To be added incrementally in later phases)
+# Example: app.include_router(auth.router, prefix="/auth", tags=["auth"])
