@@ -135,7 +135,7 @@ async def health_check():
         from qdrant_client import AsyncQdrantClient
 
         if settings.QDRANT_URL:
-            qc = AsyncQdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=2.0)
+            qc = AsyncQdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=2)
             await asyncio.wait_for(qc.get_collections(), timeout=2.0)
             if hasattr(qc, "close"):
                 await qc.close()
