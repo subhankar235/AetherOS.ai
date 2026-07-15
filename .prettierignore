@@ -1,0 +1,10 @@
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+dist/
+build/
+coverage/
+*.log
+.venv/
+__pycache__/
