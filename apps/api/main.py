@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from core.exceptions import AppError
 from core.logging import get_request_id, setup_logging, LoggingASGIMiddleware
+from routers import webhooks
 
 # Initialize structured logging
 setup_logging(log_level="DEBUG" if settings.DEBUG else "INFO")
@@ -159,5 +160,19 @@ async def health_check():
         }
     }
 
-# Mount Empty Routers (To be added incrementally in later phases)
-# Example: app.include_router(auth.router, prefix="/auth", tags=["auth"])
+# Mount Routers
+app.include_router(webhooks.router)
+
+from fastapi import APIRouter, Depends
+from core.deps import get_current_user
+
+router = APIRouter()
+
+@router.get("/me")
+async def me(user=Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "email": user.email
+    }
+
+app.include_router(router)

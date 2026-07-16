@@ -23,10 +23,24 @@ class ValidationError(AppError):
     status_code: int = 400
     code: str = "VALIDATION_ERROR"
 
+class ConfigError(AppError):
+    """Raised when required configuration is missing or invalid."""
+    status_code: int = 500
+    code: str = "CONFIG_ERROR"
+
 class AuthError(AppError):
     """Raised when authentication or authorization fails."""
     status_code: int = 401
-    code: str = "UNAUTHORIZED"
+    code: str = "auth_error"
+
+
+class IntegrationAuthRequiredError(AppError):
+    """Distinct from AuthError: the Clerk session is fine, but the user's
+    Google connection is missing/revoked. Raised in Phase 6, referenced
+    here so the type exists from Phase 5 onward if other code needs it."""
+    status_code: int = 409
+    code: str = "integration_auth_required"
+
 
 class ApprovalRequiredError(AppError):
     """Raised when an agent action requires explicit human approval to proceed."""
