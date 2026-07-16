@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from 'framer-motion';
-import { Check } from 'lucide-react';
+import { Check, Terminal } from 'lucide-react';
 
 const triageItems = [
   { label: 'High priority', count: 18, color: 'cobalt' },
@@ -27,8 +27,8 @@ export default function CommandCentre() {
         {/* Header */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-6">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30">One Interface</span>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30 hidden sm:block">Every agent, one input.</span>
+            <span className="inline-flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-mercury/60"><Terminal className="w-3 h-3" /> One Interface</span>
+            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/60 hidden sm:block">Every agent, one input.</span>
           </div>
 
           <motion.h2
