@@ -131,17 +131,17 @@ export default function Hero() {
             <span className="w-1.5 h-1.5 rounded-full bg-mercury" /> Company-aware
           </span>
         </motion.div>
-      </div>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 1, delay: 1.4 }}
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3"
-      >
-        <span className="text-[10px] uppercase tracking-[0.3em] text-mercury/50 font-mono">Scroll</span>
-        <div className="w-px h-12 bg-gradient-to-b from-mercury/40 to-transparent" />
-      </motion.div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 1, delay: 1.4 }}
+          className="mt-16 flex flex-col items-center gap-3"
+        >
+          <span className="text-[10px] uppercase tracking-[0.3em] text-mercury/50 font-mono">Scroll</span>
+          <div className="w-px h-12 bg-gradient-to-b from-mercury/40 to-transparent" />
+        </motion.div>
+      </div>
     </section>
   );
 }

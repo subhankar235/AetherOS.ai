@@ -27,8 +27,8 @@ export default function CommandCentre() {
         {/* Header */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-6">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30">§ 85 — The Interface</span>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30 hidden sm:block">A single input. One agent at a time.</span>
+            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30">One Interface</span>
+            <span className="text-[10px] font-mono uppercase tracking-widest text-mercury/30 hidden sm:block">Every agent, one input.</span>
           </div>
 
           <motion.h2

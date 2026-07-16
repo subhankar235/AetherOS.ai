@@ -16,24 +16,25 @@ import Footer from "@/components/landing/Footer";
 
 export default function Home() {
   return (
-    <>
+    <div className="relative min-h-screen bg-obsidian text-stellar overflow-x-hidden">
       <GrainBackground />
       <GhostNav />
       <main>
         <Hero />
         <Problem />
-        <Stats />
-        <AgentMap />
         <TriageBento />
+        <ApprovalGate />
+        <AgentMap />
+        <CommandCentre />
         <FeaturesBento />
         <Workflow />
-        <CommandCentre />
-        <ApprovalGate />
+        <Stats />
         <Pricing />
         <FAQ />
         <FinalCTA />
       </main>
       <Footer />
-    </>
+    </div>
   );
+
 }
