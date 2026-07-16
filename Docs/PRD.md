@@ -743,7 +743,7 @@ All agents communicate with the Supervisor via a standard envelope:
 ```
 ai-email-assistant/
 ├── apps/
-│   ├── web/                        # Next.js 15 frontend
+│   ├── web/                        # Next.js 16 frontend
 │   │   ├── app/
 │   │   │   ├── (auth)/
 │   │   │   ├── dashboard/
