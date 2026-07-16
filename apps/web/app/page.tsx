@@ -6,6 +6,7 @@ import Stats from "@/components/landing/Stats";
 import AgentMap from "@/components/landing/AgentMap";
 import TriageBento from "@/components/landing/TriageBento";
 import FeaturesBento from "@/components/landing/FeaturesBento";
+import VoiceSection from "@/components/landing/VoiceSection";
 import Workflow from "@/components/landing/Workflow";
 import CommandCentre from "@/components/landing/CommandCentre";
 import ApprovalGate from "@/components/landing/ApprovalGate";
@@ -26,6 +27,7 @@ export default function Home() {
         <ApprovalGate />
         <AgentMap />
         <CommandCentre />
+        <VoiceSection />
         <FeaturesBento />
         <Workflow />
         <Stats />
