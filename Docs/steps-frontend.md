@@ -66,7 +66,7 @@ These carry over from the PRD and must hold in every phase below:
 ## Phase 0 — Toolchain, Accounts & Design Brief
 
 ### 0.1 Install tooling
-- Node.js 20+, `pnpm` (preferred for a Turborepo/workspace setup) or `npm`
+- Node.js 20+, **pnpm** (package manager for this project — used for its native Turborepo/workspace support)
 - VS Code (or equivalent) with Tailwind CSS IntelliSense, ESLint, Prettier extensions
 
 ### 0.2 Provision accounts needed by the frontend specifically
@@ -88,11 +88,11 @@ Per the design-system principle (see rule 5 above), do this **before** Phase 3:
 
 ## Phase 1 — Repository & Folder Skeleton
 
-Scaffold Next.js 15 (App Router) inside `apps/web/`:
+Scaffold Next.js 16 (App Router) inside `apps/web/`:
 
 ```bash
 cd ai-email-assistant/apps
-npx create-next-app@latest web --typescript --tailwind --app --src-dir=false --import-alias "@/*"
+pnpm create next-app@latest web --typescript --tailwind --app --src-dir=false --import-alias "@/*"
 cd web
 ```
 
@@ -107,13 +107,13 @@ mkdir -p hooks stores lib styles docs
 Install core dependencies now (rather than incrementally, so lockfile churn doesn't complicate later phases):
 
 ```bash
-npm install @clerk/nextjs zustand @tanstack/react-query framer-motion react-hook-form zod \
+npm install zustand @tanstack/react-query framer-motion react-hook-form zod \
   lucide-react recharts date-fns
-npm install -D @types/node
-npx shadcn@latest init
+pnpm add -D @types/node
+pnpm dlx shadcn@latest init
 ```
 
-**Exit criteria:** `npm run dev` boots the default Next.js starter page at the folder structure matching `STRUCTURE.md`; `npx shadcn@latest init` has produced `components.json` and a working `components/ui/` base.
+**Exit criteria:** `pnpm dev` boots the default Next.js starter page at the folder structure matching `STRUCTURE.md`; `pnpm dlx shadcn@latest init` has produced `components.json` and a working `components/ui/` base.
 
 ---
 
@@ -535,8 +535,8 @@ Report Core Web Vitals (LCP, INP, CLS) via Next.js's built-in reporting to your 
 ## Phase 27 — CI/CD Pipeline
 
 Mirror the backend's structure (`infra/ci-cd/github-actions/deploy-web.yml`, referenced in `BACKEND_STEPS.md` Phase 25):
-- On every PR: lint (`eslint`), type-check (`tsc --noEmit`), unit/component tests, E2E tests (Phase 25, using Clerk's testing tokens / a dedicated Clerk test instance so the auth E2E test doesn't depend on real email delivery) against a preview deployment.
-- Vercel's native PR preview deployments serve as the staging step — each PR gets a real, shareable URL for design/product review before merge. Ensure preview deployments are configured with a Clerk dev/test instance key (not production Clerk credentials) via Vercel's per-environment env vars.
+- On every PR: lint (`eslint`), type-check (`tsc --noEmit`), unit/component tests, E2E tests (Phase 25) against a preview deployment.
+- Vercel's native PR preview deployments serve as the staging step — each PR gets a real, shareable URL for design/product review before merge.
 - On merge to `main`: production deployment via Vercel, with the same manual-promotion-gate pattern as the backend if the team wants an extra checkpoint before it's live (optional for frontend, since Vercel's preview-then-promote model already provides a safety net).
 
 **Exit criteria:** a PR with a failing type-check or test is blocked from merge; every PR produces a working preview URL automatically, correctly wired to a non-production Clerk instance.
@@ -545,7 +545,7 @@ Mirror the backend's structure (`infra/ci-cd/github-actions/deploy-web.yml`, ref
 
 ## Phase 28 — Deployment (Vercel)
 
-Connect the Vercel project to the repo (scoped to `apps/web/` if using a monorepo), configure environment variables per environment (dev/staging/prod) matching Appendix A below — critically, a **production Clerk instance key**, distinct from the dev/test one used in Phase 27 — and point `NEXT_PUBLIC_API_URL`/`NEXT_PUBLIC_WS_URL` at the corresponding backend environment from `BACKEND_STEPS.md` Phase 26. Confirm custom domain + HTTPS is configured for production, and that Clerk's dashboard has the production domain's redirect URLs allow-listed.
+Connect the Vercel project to the repo (scoped to `apps/web/` if using a monorepo), configure environment variables per environment (dev/staging/prod) matching Appendix A below, and point `NEXT_PUBLIC_API_URL`/`NEXT_PUBLIC_WS_URL` at the corresponding backend environment from `BACKEND_STEPS.md` Phase 26. Confirm custom domain + HTTPS is configured for production.
 
 **Exit criteria:** a full onboarding flow (PRD 7.1) — sign-up through Clerk, connecting Google via the separate integration flow, guided setup, first Command Center interaction — completes successfully against the deployed production frontend talking to the deployed staging/production backend.
 
@@ -563,6 +563,7 @@ Connect the Vercel project to the repo (scoped to `apps/web/` if using a monorep
 - [ ] Payments section correctly hidden/inert with the feature flag off in production.
 - [ ] Multi-tab/multi-device live-update consistency (Phase 20.2) verified against the real deployed backend, not just mocked — including Google-connection-status consistency across tabs.
 - [ ] Rollback plan confirmed (Vercel instant rollback to a previous deployment).
+- [ ] `pnpm-lock.yaml` is committed to the repo and CI/Vercel builds fail (rather than silently drifting) if it's out of sync with `package.json`.
 
 ---
 
@@ -585,10 +586,10 @@ Note: there is **no** `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` or similar here — t
 ## Appendix B — Build Order Cheat Sheet
 
 ```
-0.  Toolchain, accounts (incl. Clerk app), design brief written down
-1.  Folder skeleton (Next.js App Router + STRUCTURE.md layout; sign-in/sign-up routes, not login/callback)
-2.  App shell bootstrap (config, providers, mock API layer — Clerk never mocked)
-3.  Design system foundation (tokens, typography, signature element spec, Clerk appearance theming)
+0.  Toolchain, accounts, design brief written down
+1.  Folder skeleton (Next.js App Router + STRUCTURE.md layout)
+2.  App shell bootstrap (config, providers, mock API layer)
+3.  Design system foundation (tokens, typography, signature element spec)
 4.  Core UI primitives (components/ui/, re-skinned shadcn)
 5.  State management (Zustand stores incl. integrationStore + TanStack Query)
 6.  API client + WebSocket client (Clerk token attached) + audio utils
@@ -612,8 +613,8 @@ Note: there is **no** `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` or similar here — t
 24. Frontend observability (Sentry, funnel analytics incl. Google-connect funnel, Web Vitals)
 25. Testing (component, integration, E2E incl. Clerk + Google round trips separately, visual regression, a11y)
 26. Performance optimization
-27. CI/CD pipeline (Clerk test/dev instance in previews)
-28. Vercel deployment (production Clerk instance)
+27. CI/CD pipeline
+28. Vercel deployment
 29. Production readiness checklist
 ```
 
