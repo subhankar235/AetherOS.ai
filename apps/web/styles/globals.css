@@ -55,6 +55,9 @@
   --color-mercury: #9ca3af;
   --color-obsidian: #050505;
   --color-emerald-gate: #10b981;
+  --color-brass: #d4af37;
+  --color-brass-light: #e0c35a;
+  --color-obsidian-light: #0f0f10;
 
   --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
   --animate-breath: breath 4s ease-in-out infinite;

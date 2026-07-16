@@ -12,7 +12,7 @@ const agents = [
   { name: 'Support', icon: HelpCircle, angle: 300, desc: 'In-app guidance' },
 ];
 
-function getPos(angle: number, radius = 38) {
+function getPos(angle: number, radius = 42) {
   const rad = (angle - 90) * (Math.PI / 180);
   return {
     x: 50 + radius * Math.cos(rad),
@@ -72,7 +72,7 @@ export default function AgentMap() {
           className="relative w-full max-w-xl mx-auto aspect-square"
         >
           {/* SVG connection lines */}
-          <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" fill="none" preserveAspectRatio="none">
             <defs>
               <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stopColor="rgba(59,130,246,0.3)" />
@@ -101,7 +101,7 @@ export default function AgentMap() {
               );
             })}
             {/* Outer ring */}
-            <circle cx="50" cy="50" r="38" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="0.2" strokeDasharray="1 2" />
+            <circle cx="50" cy="50" r="34" stroke="rgba(255,255,255,0.03)" strokeWidth="0.2" strokeDasharray="1 2" />
           </svg>
 
           {/* Supervisor node (center) */}

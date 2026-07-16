@@ -6,7 +6,9 @@ import Stats from "@/components/landing/Stats";
 import AgentMap from "@/components/landing/AgentMap";
 import TriageBento from "@/components/landing/TriageBento";
 import FeaturesBento from "@/components/landing/FeaturesBento";
+import VoiceSection from "@/components/landing/VoiceSection";
 import Workflow from "@/components/landing/Workflow";
+import CommandCentre from "@/components/landing/CommandCentre";
 import ApprovalGate from "@/components/landing/ApprovalGate";
 import Pricing from "@/components/landing/Pricing";
 import FAQ from "@/components/landing/FAQ";
@@ -15,23 +17,26 @@ import Footer from "@/components/landing/Footer";
 
 export default function Home() {
   return (
-    <>
+    <div className="relative min-h-screen bg-obsidian text-stellar overflow-x-hidden">
       <GrainBackground />
       <GhostNav />
       <main>
         <Hero />
         <Problem />
-        <Stats />
-        <AgentMap />
         <TriageBento />
+        <ApprovalGate />
+        <AgentMap />
+        <CommandCentre />
+        <VoiceSection />
         <FeaturesBento />
         <Workflow />
-        <ApprovalGate />
+        <Stats />
         <Pricing />
         <FAQ />
         <FinalCTA />
       </main>
       <Footer />
-    </>
+    </div>
   );
+
 }
