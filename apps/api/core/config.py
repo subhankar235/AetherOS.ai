@@ -1,14 +1,15 @@
 
 # Loads all environment variables (API keys, database URLs, secrets, etc.) and provides them to the entire application from one place.
 from typing import List, Optional
-from pydantic import model_validator
+from pydantic import model_validator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        populate_by_name=True
     )
 
     APP_NAME: str = "AI Email Assistant"
@@ -43,9 +44,31 @@ class Settings(BaseSettings):
     # CORS
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,https://app.yourdomain.com"
     
+    # --- Clerk (identity/session — see Phase 5) ---
+    clerk_secret_key: str = Field(..., alias="CLERK_SECRET_KEY")
+    clerk_publishable_key: str = Field(..., alias="CLERK_PUBLISHABLE_KEY")
+    clerk_webhook_signing_secret: str = Field(..., alias="CLERK_WEBHOOK_SIGNING_SECRET")
+    CLERK_JWT_ISSUER: Optional[str] = Field(None, alias="CLERK_JWT_ISSUER")
+    clerk_jwks_url: Optional[str] = Field(None, alias="CLERK_JWKS_URL")
+    clerk_issuer: Optional[str] = Field(None, alias="CLERK_ISSUER")  # e.g. https://your-app-name.clerk.accounts.dev
+    
     @property
     def cors_origins(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def set_clerk_defaults(self) -> "Settings":
+        if not self.clerk_issuer and self.CLERK_JWT_ISSUER:
+            issuer = self.CLERK_JWT_ISSUER
+            if not issuer.startswith("http"):
+                issuer = f"https://{issuer}"
+            self.clerk_issuer = issuer
+
+        if not self.clerk_jwks_url and self.clerk_issuer:
+            self.clerk_jwks_url = f"{self.clerk_issuer.rstrip('/')}/.well-known/jwks.json"
+
+        return self
+
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
@@ -87,4 +110,4 @@ class Settings(BaseSettings):
                 )
         return self
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

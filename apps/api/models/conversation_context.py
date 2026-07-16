@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy import String, DateTime, ForeignKey, UniqueConstraint, UUID, func
 from sqlalchemy.orm import Mapped, mapped_column
 from db.base import Base
 
@@ -9,7 +9,7 @@ class ConversationContext(Base):
     __tablename__ = "conversation_context"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     session_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     active_email_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("email_metadata.id", ondelete="SET NULL"), nullable=True)
     active_thread_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("threads.id", ondelete="SET NULL"), nullable=True)
