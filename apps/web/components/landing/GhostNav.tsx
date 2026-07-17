@@ -67,7 +67,7 @@ export default function GhostNav() {
 
           <div className="flex items-center gap-3">
             <a
-              href="#cta"
+              href="/dashboard"
               className="hidden md:inline-flex items-center px-5 py-2 text-sm font-medium text-obsidian bg-stellar rounded-full hover:bg-white transition-all duration-200 hover:shadow-[0_0_30px_-5px_rgba(249,250,251,0.3)]"
             >
               Get Started
@@ -124,7 +124,7 @@ export default function GhostNav() {
                 </motion.a>
               ))}
               <motion.a
-                href="#cta"
+                href="/dashboard"
                 onClick={() => setMenuOpen(false)}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
