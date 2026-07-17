@@ -163,6 +163,10 @@ async def health_check():
 # Mount Routers
 app.include_router(webhooks.router)
 
+from routers import integrations, inbox
+app.include_router(integrations.router)
+app.include_router(inbox.router)
+
 from fastapi import APIRouter, Depends
 from core.deps import get_current_user
 
