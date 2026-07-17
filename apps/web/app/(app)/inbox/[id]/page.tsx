@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { emails, drafts } from "@/lib/mock-data";
 import { ArrowLeft, Calendar, MessageSquare, Sparkles } from "lucide-react";
 
-export default function EmailDetail({ params }: { params: { id: string } }) {
-  const email = emails.find((e) => e.id === params.id);
+export default async function EmailDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const email = emails.find((e) => e.id === id);
   if (!email) notFound();
 
   const draft = drafts.find((d) => d.emailId === email.id);

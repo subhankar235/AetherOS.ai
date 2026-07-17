@@ -61,9 +61,9 @@ function Sidebar({
         "group/sidebar flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-all duration-200 overflow-hidden",
         collapsible === "icon"
           ? open
-            ? "w-56"
+            ? "w-64"
             : "w-12"
-          : "w-56",
+          : "w-64",
         className
       )}
     >
