@@ -102,3 +102,77 @@ def verify_webhook_signature(payload_body: bytes, headers: dict, signing_secret:
         return wh.verify(payload_body, headers)
     except WebhookVerificationError as exc:
         raise AuthError(f"Webhook signature verification failed: {exc}") from exc
+
+
+# --- 3. Google OAuth Cryptography Helpers ----------------------------------
+
+import base64
+import os
+import hashlib
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from itsdangerous import URLSafeSerializer
+from core.exceptions import AppError
+
+
+def _get_encryption_key() -> bytes:
+    key_str = settings.token_encryption_key
+    # Generate a secure 32-byte key from the configured encryption key via SHA-256
+    return hashlib.sha256(key_str.encode("utf-8")).digest()
+
+
+def encrypt_token(token: str) -> str:
+    """
+    Encrypts a token string using AES-256-GCM and returns a base64 encoded string
+    containing the IV (nonce) followed by the ciphertext.
+    """
+    if not token:
+        return ""
+    try:
+        key = _get_encryption_key()
+        aesgcm = AESGCM(key)
+        nonce = os.urandom(12)  # Standard 12-byte nonce for GCM
+        ciphertext = aesgcm.encrypt(nonce, token.encode("utf-8"), None)
+        return base64.b64encode(nonce + ciphertext).decode("utf-8")
+    except Exception as exc:
+        raise AppError(f"Token encryption failed: {str(exc)}")
+
+
+def decrypt_token(encrypted_token: str) -> str:
+    """
+    Decrypts a base64 encoded token string that was encrypted using AES-256-GCM.
+    """
+    if not encrypted_token:
+        return ""
+    try:
+        key = _get_encryption_key()
+        aesgcm = AESGCM(key)
+        data = base64.b64decode(encrypted_token.encode("utf-8"))
+        if len(data) < 12:
+            raise ValueError("Encrypted data is too short")
+        nonce = data[:12]
+        ciphertext = data[12:]
+        decrypted = aesgcm.decrypt(nonce, ciphertext, None)
+        return decrypted.decode("utf-8")
+    except Exception as exc:
+        raise AppError(f"Token decryption failed: {str(exc)}")
+
+
+def generate_oauth_state(user_id: str) -> str:
+    """
+    Generates a secure, cryptographically signed state parameter for Google OAuth.
+    """
+    serializer = URLSafeSerializer(settings.SECRET_KEY, salt="oauth-state")
+    return serializer.dumps({"user_id": user_id})
+
+
+def verify_oauth_state(state: str) -> str:
+    """
+    Verifies the signature of the Google OAuth state parameter and returns the user ID.
+    Raises AuthError if signature is invalid or expired.
+    """
+    serializer = URLSafeSerializer(settings.SECRET_KEY, salt="oauth-state")
+    try:
+        data = serializer.loads(state)
+        return data["user_id"]
+    except Exception as exc:
+        raise AuthError(f"Invalid or expired OAuth state: {str(exc)}")
