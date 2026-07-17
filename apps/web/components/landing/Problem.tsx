@@ -77,9 +77,9 @@ export default function Problem() {
               initial={{ opacity: 0 }}
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
-              className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-mercury/60 mb-6"
+              className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-red-400/70 mb-6"
             >
-              <AlertCircle className="w-3 h-3" /> The Problem
+              <AlertCircle className="w-3 h-3 text-red-400" /> The Problem
             </motion.span>
 
             <motion.h2

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from 'framer-motion';
-import { Mic, Brain, BookMarked, Star, TrendingUp, Search, ArrowRight } from 'lucide-react';
+import { Mic, Zap, Brain, BookMarked, Star, TrendingUp, Search, ArrowRight } from 'lucide-react';
 
 const features = [
   {
@@ -56,7 +56,7 @@ export default function FeaturesBento() {
             viewport={{ once: true }}
             className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-mercury/60 mb-4"
           >
-            <Mic className="w-3 h-3" /> Beyond Triage
+            <Zap className="w-3 h-3" /> Beyond Triage
           </motion.span>
           <motion.h2
             initial={{ opacity: 0, y: 20 }}
