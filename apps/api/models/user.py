@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, Enum, func
+from sqlalchemy import String, DateTime, Enum, Boolean, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,8 @@ class User(Base):
     timezone: Mapped[str] = mapped_column(String, default="UTC", nullable=False)
     language_preference: Mapped[str] = mapped_column(String, default="en", nullable=False)
     plan_tier: Mapped[str] = mapped_column(String, default="free", nullable=False)
+    voice_profile_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    voice_history_opt_in: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

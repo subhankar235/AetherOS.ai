@@ -23,6 +23,17 @@ app = FastAPI(
     debug=settings.DEBUG,
 )
 
+# Startup event to initialize vector collections
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Initializing Qdrant collections on startup...")
+    try:
+        from integrations.qdrant_client import qdrant_client
+        await qdrant_client.init_collections()
+        logger.info("Qdrant collections initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Qdrant collections on startup: {str(e)}")
+
 # Register CORS middleware (locked to known origins from settings)
 app.add_middleware(
     CORSMiddleware,
@@ -163,9 +174,10 @@ async def health_check():
 # Mount Routers
 app.include_router(webhooks.router)
 
-from routers import integrations, inbox
+from routers import integrations, inbox, knowledge
 app.include_router(integrations.router)
 app.include_router(inbox.router)
+app.include_router(knowledge.router)
 
 from fastapi import APIRouter, Depends
 from core.deps import get_current_user
