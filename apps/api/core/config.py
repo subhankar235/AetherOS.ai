@@ -33,11 +33,20 @@ class Settings(BaseSettings):
     
     # OpenAI & ElevenLabs
     OPENAI_API_KEY: str = "sk-xxxxxxxxxxxxxxxxxxxxx"
-    ELEVENLABS_API_KEY: str = "el_xxxxxxxxxxxxxxxxxxxxx"
+    ELEVENLABS_API_KEY: str = "sk_17c9803ed2daa90d1f648c98d93d21c5be8ffb63074beebb"
+    ELEVENLABS_VOICE_ID: str = "OtEfb2LVzIE45wdYe54M"
+    ELEVENLABS_STT_MODEL: str = "eleven-stt-v1"
+    ELEVENLABS_TTS_MODEL: str = "eleven-multilingual-v2"
+    ELEVENLABS_DEFAULT_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
+    ELEVENLABS_DEFAULT_MODEL_ID: str = "eleven_flash_v2_5"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
     
     # Qdrant Vector DB
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = ""
+    QDRANT_COLLECTION_COMPANY_MEMORY: str = "company_memory"
+    QDRANT_COLLECTION_RESEARCH_CACHE: str = "research_cache"
+    QDRANT_COLLECTION_SUPPORT_KB: str = "support_kb"
     
     # Sentry DSN
     SENTRY_DSN: Optional[str] = None
