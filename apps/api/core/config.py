@@ -1,14 +1,15 @@
 
 # Loads all environment variables (API keys, database URLs, secrets, etc.) and provides them to the entire application from one place.
 from typing import List, Optional
-from pydantic import model_validator
+from pydantic import model_validator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        populate_by_name=True
     )
 
     APP_NAME: str = "AI Email Assistant"
@@ -22,14 +23,30 @@ class Settings(BaseSettings):
     # Google OAuth
     GOOGLE_CLIENT_ID: str = "your_google_client_id.apps.googleusercontent.com"
     GOOGLE_CLIENT_SECRET: str = "your_google_client_secret"
+    GOOGLE_REDIRECT_URI: str = Field("http://localhost:8000/integrations/google/callback", alias="GOOGLE_REDIRECT_URI")
+    GOOGLE_PUBSUB_VERIFICATION_TOKEN: str = Field("change_this_webhook_verification_token", alias="GOOGLE_PUBSUB_VERIFICATION_TOKEN")
+    token_encryption_key: str = Field("change_this_to_a_32_byte_key", alias="TOKEN_ENCRYPTION_KEY")
+    RATE_LIMIT_GMAIL_PER_MIN: int = Field(60, alias="RATE_LIMIT_GMAIL_PER_MIN")
+    RATE_LIMIT_CALENDAR_PER_MIN: int = Field(60, alias="RATE_LIMIT_CALENDAR_PER_MIN")
+    CELERY_BROKER_URL: str = Field("redis://localhost:6379/1", alias="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: str = Field("redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND")
     
     # OpenAI & ElevenLabs
     OPENAI_API_KEY: str = "sk-xxxxxxxxxxxxxxxxxxxxx"
-    ELEVENLABS_API_KEY: str = "el_xxxxxxxxxxxxxxxxxxxxx"
+    ELEVENLABS_API_KEY: str = "sk_17c9803ed2daa90d1f648c98d93d21c5be8ffb63074beebb"
+    ELEVENLABS_VOICE_ID: str = "OtEfb2LVzIE45wdYe54M"
+    ELEVENLABS_STT_MODEL: str = "eleven-stt-v1"
+    ELEVENLABS_TTS_MODEL: str = "eleven-multilingual-v2"
+    ELEVENLABS_DEFAULT_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
+    ELEVENLABS_DEFAULT_MODEL_ID: str = "eleven_flash_v2_5"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
     
     # Qdrant Vector DB
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = ""
+    QDRANT_COLLECTION_COMPANY_MEMORY: str = "company_memory"
+    QDRANT_COLLECTION_RESEARCH_CACHE: str = "research_cache"
+    QDRANT_COLLECTION_SUPPORT_KB: str = "support_kb"
     
     # Sentry DSN
     SENTRY_DSN: Optional[str] = None
@@ -43,9 +60,31 @@ class Settings(BaseSettings):
     # CORS
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,https://app.yourdomain.com"
     
+    # --- Clerk (identity/session — see Phase 5) ---
+    clerk_secret_key: str = Field(..., alias="CLERK_SECRET_KEY")
+    clerk_publishable_key: str = Field(..., alias="CLERK_PUBLISHABLE_KEY")
+    clerk_webhook_signing_secret: str = Field(..., alias="CLERK_WEBHOOK_SIGNING_SECRET")
+    CLERK_JWT_ISSUER: Optional[str] = Field(None, alias="CLERK_JWT_ISSUER")
+    clerk_jwks_url: Optional[str] = Field(None, alias="CLERK_JWKS_URL")
+    clerk_issuer: Optional[str] = Field(None, alias="CLERK_ISSUER")  # e.g. https://your-app-name.clerk.accounts.dev
+    
     @property
     def cors_origins(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def set_clerk_defaults(self) -> "Settings":
+        if not self.clerk_issuer and self.CLERK_JWT_ISSUER:
+            issuer = self.CLERK_JWT_ISSUER
+            if not issuer.startswith("http"):
+                issuer = f"https://{issuer}"
+            self.clerk_issuer = issuer
+
+        if not self.clerk_jwks_url and self.clerk_issuer:
+            self.clerk_jwks_url = f"{self.clerk_issuer.rstrip('/')}/.well-known/jwks.json"
+
+        return self
+
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
@@ -87,4 +126,4 @@ class Settings(BaseSettings):
                 )
         return self
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

@@ -13,6 +13,7 @@ from models.vendor import Vendor
 from models.purchase_order import PurchaseOrder
 from models.payment_policy import PaymentPolicy
 from models.payment_record import PaymentRecord
+from models.google_integration import GoogleIntegration
 
 __all__ = [
     "Base",
@@ -30,4 +31,5 @@ __all__ = [
     "PurchaseOrder",
     "PaymentPolicy",
     "PaymentRecord",
+    "GoogleIntegration",
 ]

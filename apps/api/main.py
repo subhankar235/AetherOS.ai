@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from core.exceptions import AppError
 from core.logging import get_request_id, setup_logging, LoggingASGIMiddleware
+from routers import webhooks
 
 # Initialize structured logging
 setup_logging(log_level="DEBUG" if settings.DEBUG else "INFO")
@@ -21,6 +22,17 @@ app = FastAPI(
     description="AetherOS Core API Server",
     debug=settings.DEBUG,
 )
+
+# Startup event to initialize vector collections
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Initializing Qdrant collections on startup...")
+    try:
+        from integrations.qdrant_client import qdrant_client
+        await qdrant_client.init_collections()
+        logger.info("Qdrant collections initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Qdrant collections on startup: {str(e)}")
 
 # Register CORS middleware (locked to known origins from settings)
 app.add_middleware(
@@ -159,5 +171,24 @@ async def health_check():
         }
     }
 
-# Mount Empty Routers (To be added incrementally in later phases)
-# Example: app.include_router(auth.router, prefix="/auth", tags=["auth"])
+# Mount Routers
+app.include_router(webhooks.router)
+
+from routers import integrations, inbox, knowledge
+app.include_router(integrations.router)
+app.include_router(inbox.router)
+app.include_router(knowledge.router)
+
+from fastapi import APIRouter, Depends
+from core.deps import get_current_user
+
+router = APIRouter()
+
+@router.get("/me")
+async def me(user=Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "email": user.email
+    }
+
+app.include_router(router)

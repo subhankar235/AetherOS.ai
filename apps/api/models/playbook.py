@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Any, Optional
-from sqlalchemy import String, DateTime, ForeignKey, func
+from sqlalchemy import String, DateTime, ForeignKey, UUID, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from db.base import Base
@@ -10,7 +10,7 @@ class Playbook(Base):
     __tablename__ = "playbooks"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     org_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     scenario_type: Mapped[str] = mapped_column(String, nullable=False)

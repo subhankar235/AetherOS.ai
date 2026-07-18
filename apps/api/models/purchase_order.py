@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Numeric, DateTime, ForeignKey, func
+from sqlalchemy import String, Numeric, DateTime, ForeignKey, UUID, func
 from sqlalchemy.orm import Mapped, mapped_column
 from db.base import Base
 
@@ -9,7 +9,7 @@ class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     org_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     vendor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False, index=True)
     po_number: Mapped[str] = mapped_column(String, nullable=False, index=True)
