@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Menu, X } from 'lucide-react';
+import { useUser } from "@clerk/nextjs";
 
 const navLinks = [
   { label: 'Triage', href: '#triage' },
@@ -12,6 +13,7 @@ const navLinks = [
 ];
 
 export default function GhostNav() {
+  const { isSignedIn } = useUser();
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -66,12 +68,29 @@ export default function GhostNav() {
           </div>
 
           <div className="flex items-center gap-3">
-            <a
-              href="/dashboard"
-              className="hidden md:inline-flex items-center px-5 py-2 text-sm font-medium text-obsidian bg-stellar rounded-full hover:bg-white transition-all duration-200 hover:shadow-[0_0_30px_-5px_rgba(249,250,251,0.3)]"
-            >
-              Get Started
-            </a>
+            {isSignedIn ? (
+              <a
+                href="/dashboard"
+                className="hidden md:inline-flex items-center px-5 py-2 text-sm font-medium text-obsidian bg-stellar rounded-full hover:bg-white transition-all duration-200 hover:shadow-[0_0_30px_-5px_rgba(249,250,251,0.3)]"
+              >
+                Dashboard
+              </a>
+            ) : (
+              <>
+                <a
+                  href="/sign-in"
+                  className="hidden md:inline-flex items-center px-4 py-2 text-sm text-mercury hover:text-stellar transition-colors duration-200"
+                >
+                  Sign In
+                </a>
+                <a
+                  href="/sign-up"
+                  className="hidden md:inline-flex items-center px-5 py-2 text-sm font-medium text-obsidian bg-stellar rounded-full hover:bg-white transition-all duration-200 hover:shadow-[0_0_30px_-5px_rgba(249,250,251,0.3)]"
+                >
+                  Get Started
+                </a>
+              </>
+            )}
             <button
               onClick={() => setMenuOpen(true)}
               className="md:hidden w-9 h-9 flex items-center justify-center text-stellar"
@@ -123,16 +142,41 @@ export default function GhostNav() {
                   {link.label}
                 </motion.a>
               ))}
-              <motion.a
-                href="/dashboard"
-                onClick={() => setMenuOpen(false)}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 + navLinks.length * 0.05 }}
-                className="mt-6 px-8 py-3 text-base font-medium text-obsidian bg-stellar rounded-full"
-              >
-                Get Started
-              </motion.a>
+              {isSignedIn ? (
+                <motion.a
+                  href="/dashboard"
+                  onClick={() => setMenuOpen(false)}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1 + navLinks.length * 0.05 }}
+                  className="mt-4 px-8 py-3 text-base font-medium text-obsidian bg-stellar rounded-full"
+                >
+                  Dashboard
+                </motion.a>
+              ) : (
+                <>
+                  <motion.a
+                    href="/sign-in"
+                    onClick={() => setMenuOpen(false)}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.1 + navLinks.length * 0.05 }}
+                    className="text-2xl font-medium tracking-tight text-mercury hover:text-stellar transition-colors py-2"
+                  >
+                    Sign In
+                  </motion.a>
+                  <motion.a
+                    href="/sign-up"
+                    onClick={() => setMenuOpen(false)}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.1 + (navLinks.length + 1) * 0.05 }}
+                    className="mt-4 px-8 py-3 text-base font-medium text-obsidian bg-stellar rounded-full"
+                  >
+                    Get Started
+                  </motion.a>
+                </>
+              )}
             </div>
           </motion.div>
         )}

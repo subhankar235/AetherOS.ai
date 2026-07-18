@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useUser, UserButton } from "@clerk/nextjs";
 import {
   Inbox,
   Mic,
@@ -51,6 +52,7 @@ const oversight = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { user } = useUser();
   const isActive = (url: string) =>
     url === "/dashboard" ? pathname === url : pathname.startsWith(url);
 
@@ -96,11 +98,15 @@ export function AppSidebar() {
         {renderGroup("Oversight", oversight)}
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex items-center gap-3 rounded-md bg-sidebar-accent px-3 py-2.5 group-data-[state=collapsed]/sidebar:justify-center group-data-[state=collapsed]/sidebar:gap-0 group-data-[state=collapsed]/sidebar:bg-transparent group-data-[state=collapsed]/sidebar:px-0 group-data-[state=collapsed]/sidebar:py-0">
-          <div className="h-8 w-8 shrink-0 rounded-full bg-gradient-to-br from-primary to-accent" />
+        <div className="flex items-center gap-3 rounded-md bg-sidebar-accent px-3 py-2.5 group-data-[state=collapsed]/sidebar:justify-center group-data-[state=collapsed]/sidebar:gap-0 group-data-[state=collapsed]/sidebar:bg-transparent group-data-[state=collapsed]/sidebar:px-0 group-data-[state=collapsed]/sidebar:py-0 group-data-[state=collapsed]/sidebar:[&_.cl-userButtonTrigger]:!flex group-data-[state=collapsed]/sidebar:[&_.cl-userButtonTrigger]:!justify-center">
+          <UserButton />
           <div className="flex flex-col text-xs leading-tight group-data-[state=collapsed]/sidebar:hidden">
-            <span className="font-medium">Alex Kim</span>
-            <span className="text-muted-foreground">alex@company.com</span>
+            <span className="font-medium">
+              {user?.fullName || user?.emailAddresses?.[0]?.emailAddress || "User"}
+            </span>
+            <span className="text-muted-foreground">
+              {user?.emailAddresses?.[0]?.emailAddress || ""}
+            </span>
           </div>
         </div>
       </SidebarFooter>

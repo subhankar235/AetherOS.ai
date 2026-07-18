@@ -1,7 +1,9 @@
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
+import { auth } from "@clerk/nextjs/server";
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  await auth.protect();
   return (
     <SidebarProvider>
       <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
