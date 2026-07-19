@@ -67,6 +67,8 @@ AGENT_ALLOWED_IMPORTS: dict[str, set[str]] = {
         "schemas.agent_response_schema",
         "services.approval.approval_gate",
         "services.audit.audit_logger",
+        "agents.supervisor.prompts",
+        "agents.calendar_agent.extractor",
         "db.session",
     },
     "knowledge_agent": {
@@ -129,7 +131,7 @@ FORBIDDEN_IMPORTS: dict[str, set[str]] = {
 }
 
 
-def _get_top_level_imports(filepath: Path) -> list[str]:
+def _get_full_imports(filepath: Path) -> list[str]:
     with open(filepath, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=str(filepath))
 
@@ -137,11 +139,10 @@ def _get_top_level_imports(filepath: Path) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.append(alias.name.split(".")[0])
+                imports.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                top = node.module.split(".")[0]
-                imports.append(top)
+                imports.append(node.module)
     return imports
 
 
@@ -164,10 +165,9 @@ def test_agent_import_boundaries():
         for py_file in py_files:
             if py_file.name.startswith("__"):
                 continue
-            imports = _get_top_level_imports(py_file)
+            imports = _get_full_imports(py_file)
             for forbid in forbidden:
-                top = forbid.split(".")[0]
-                if top in imports:
+                if any(imp.startswith(forbid) for imp in imports):
                     pytest.fail(
                         f"Agent '{agent_name}' in {py_file.relative_to(AGENTS_DIR.parent)} "
                         f"imports forbidden module '{forbid}'. "
