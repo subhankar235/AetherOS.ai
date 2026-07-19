@@ -32,7 +32,9 @@ AGENT_ALLOWED_IMPORTS: dict[str, set[str]] = {
         "schemas.agent_response_schema",
         "services.approval.approval_gate",
         "services.audit.audit_logger",
+        "agents.supervisor.prompts",
         "db.session",
+        "workers.email_processor",
     },
     "reply_agent": {
         "integrations.gmail_client",
