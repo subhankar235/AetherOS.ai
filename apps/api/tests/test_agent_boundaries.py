@@ -7,6 +7,19 @@ import pytest
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
 AGENT_ALLOWED_IMPORTS: dict[str, set[str]] = {
+    "supervisor": {
+        "core.config",
+        "core.exceptions",
+        "core.logging",
+        "schemas.agent_response_schema",
+        "services.approval.approval_gate",
+        "services.audit.audit_logger",
+        "db.session",
+        "agents.supervisor.intent_router",
+        "agents.supervisor.context_manager",
+        "agents.supervisor.task_decomposer",
+        "langgraph.graph",
+    },
     "inbox_agent": {
         "integrations.gmail_client",
         "integrations.google_auth",
