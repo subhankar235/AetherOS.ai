@@ -1,5 +1,5 @@
-import json
 import logging
+import uuid
 from typing import Any, Literal, Optional
 
 from langgraph.graph import StateGraph, START, END
@@ -12,7 +12,7 @@ from agents.supervisor.context_manager import (
     get_default_context,
     format_clarification,
 )
-from agents.supervisor.task_decomposer import decompose, execute_sequentially, Task
+from agents.supervisor.task_decomposer import execute_sequentially, Task
 from schemas.agent_response_schema import AgentResponse
 
 logger = logging.getLogger("agents.supervisor.graph")
@@ -117,8 +117,67 @@ def route_after_context(state: SupervisorState) -> str:
     return "execute_tasks"
 
 
+async def run_knowledge_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    from db.session import AsyncSessionLocal
+    from agents.knowledge_agent.retriever import query_knowledge
+
+    query = params.get("query", "")
+    user_id_str = params.get("_user_id", "")
+    org_id = params.get("_org_id", "default_org")
+    access_level = params.get("_access_level", "Member")
+
+    logger.info(f"Running knowledge_agent/{action}: query='{query[:80]}...'")
+
+    if not query:
+        return {
+            "agent": "knowledge_agent",
+            "status": "completed",
+            "result": {
+                "answer": "Please provide a query to search the knowledge base.",
+                "sources": [],
+                "conflicts_detected": False,
+                "conflicts": [],
+                "total_results": 0,
+            },
+            "context_updates": {},
+            "requires_approval": False,
+        }
+
+    if action == "query":
+        try:
+            async with AsyncSessionLocal() as db:
+                uid = uuid.UUID(user_id_str) if user_id_str else uuid.uuid4()
+                return await query_knowledge(
+                    query=query,
+                    user_id=uid,
+                    org_id=org_id,
+                    access_level=access_level,
+                    db=db,
+                )
+        except Exception as exc:
+            logger.exception(f"Knowledge agent query failed: {exc}")
+            return {
+                "agent": "knowledge_agent",
+                "status": "error",
+                "result": {"error": f"Knowledge base query failed: {str(exc)}"},
+                "context_updates": {},
+                "requires_approval": False,
+            }
+
+    return {
+        "agent": "knowledge_agent",
+        "status": "error",
+        "result": {"error": f"Unknown knowledge_agent action: '{action}'"},
+        "context_updates": {},
+        "requires_approval": False,
+    }
+
+
 async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"Stub agent runner: {agent}/{action} with params={params}")
+
+    if agent == "knowledge_agent":
+        return await run_knowledge_agent(action, params)
 
     if agent == "inbox_agent":
         return {
@@ -167,19 +226,6 @@ async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> 
             "requires_approval": True,
         }
 
-    if agent == "knowledge_agent":
-        return {
-            "agent": "knowledge_agent",
-            "status": "completed",
-            "result": {
-                "message": f"Knowledge base result for '{params.get('query', '')}'",
-                "answer": "Based on your company knowledge base, the refund policy allows returns within 30 days of purchase.",
-                "sources": [{"title": "Refund Policy v2", "url": "https://kb.company.com/refunds"}],
-            },
-            "context_updates": {},
-            "requires_approval": False,
-        }
-
     if agent == "research_agent":
         return {
             "agent": "research_agent",
@@ -215,7 +261,17 @@ async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> 
 
 
 async def execute_tasks_node(state: SupervisorState) -> dict[str, Any]:
-    tasks = [Task(**t) if isinstance(t, dict) else t for t in state["task_queue"]]
+    raw_tasks = state["task_queue"]
+    enriched = []
+    for t in raw_tasks:
+        task = t if isinstance(t, dict) else {"agent": t.agent, "action": t.action, "params": t.params}
+        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent"):
+            task.setdefault("params", {})["_user_id"] = state.get("user_id", "")
+            task.setdefault("params", {})["_org_id"] = "default_org"
+            task.setdefault("params", {})["_access_level"] = "Member"
+        enriched.append(task)
+
+    tasks = [Task(**t) if isinstance(t, dict) else t for t in enriched]
 
     results = await execute_sequentially(tasks, stub_agent_runner)
 
