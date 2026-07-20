@@ -215,6 +215,49 @@ async def run_research_agent(action: str, params: dict[str, Any]) -> dict[str, A
     }
 
 
+async def run_support_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    from agents.support_agent import answer_question
+
+    question = params.get("question", "")
+
+    logger.info(f"Running support_agent/{action}: question='{question[:80]}...'")
+
+    if not question:
+        return {
+            "agent": "support_agent",
+            "status": "completed",
+            "result": {
+                "answer": "Hi! I'm the AI Email Assistant support bot. How can I help you today? "
+                         "You can ask me how to use features, or report a bug.",
+                "sources": [],
+                "classification": "greeting",
+            },
+            "context_updates": {},
+            "requires_approval": False,
+        }
+
+    if action in ("help", "answer"):
+        try:
+            return await answer_question(question=question)
+        except Exception as exc:
+            logger.exception(f"Support agent failed: {exc}")
+            return {
+                "agent": "support_agent",
+                "status": "error",
+                "result": {"error": f"Support query failed: {str(exc)}"},
+                "context_updates": {},
+                "requires_approval": False,
+            }
+
+    return {
+        "agent": "support_agent",
+        "status": "error",
+        "result": {"error": f"Unknown support_agent action: '{action}'"},
+        "context_updates": {},
+        "requires_approval": False,
+    }
+
+
 async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"Stub agent runner: {agent}/{action} with params={params}")
 
@@ -272,16 +315,7 @@ async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> 
         return await run_research_agent(action, params)
 
     if agent == "support_agent":
-        return {
-            "agent": "support_agent",
-            "status": "completed",
-            "result": {
-                "message": f"Support answer for '{params.get('question', '')}'",
-                "answer": "You can search emails by saying 'show me emails from' or typing it in the command bar.",
-            },
-            "context_updates": {},
-            "requires_approval": False,
-        }
+        return await run_support_agent(action, params)
 
     return {
         "agent": agent,
@@ -297,7 +331,7 @@ async def execute_tasks_node(state: SupervisorState) -> dict[str, Any]:
     enriched = []
     for t in raw_tasks:
         task = t if isinstance(t, dict) else {"agent": t.agent, "action": t.action, "params": t.params}
-        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent", "research_agent"):
+        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent", "research_agent", "support_agent"):
             task.setdefault("params", {})["_user_id"] = state.get("user_id", "")
             task.setdefault("params", {})["_org_id"] = "default_org"
             task.setdefault("params", {})["_access_level"] = "Member"

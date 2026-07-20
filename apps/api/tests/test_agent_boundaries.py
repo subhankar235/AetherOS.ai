@@ -99,6 +99,9 @@ AGENT_ALLOWED_IMPORTS: dict[str, set[str]] = {
         "core.logging",
         "schemas.agent_response_schema",
         "services.audit.audit_logger",
+        "services.rag.embedder",
+        "agents.supervisor.prompts",
+        "agents.support_agent.help",
         "db.session",
     },
     "payment_agent": {
