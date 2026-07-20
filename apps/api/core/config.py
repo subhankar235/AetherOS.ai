@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     CLERK_JWT_ISSUER: Optional[str] = Field(None, alias="CLERK_JWT_ISSUER")
     clerk_jwks_url: Optional[str] = Field(None, alias="CLERK_JWKS_URL")
     clerk_issuer: Optional[str] = Field(None, alias="CLERK_ISSUER")  # e.g. https://your-app-name.clerk.accounts.dev
+
+    # Feature flags
+    PAYMENT_AGENT_ENABLED: bool = False
     
     @property
     def cors_origins(self) -> List[str]:
