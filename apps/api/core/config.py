@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_SUPPORT_KB: str = "support_kb"
     
     # Sentry DSN
+    # Web Search
+    TAVILY_API_KEY: Optional[str] = None
+    
     SENTRY_DSN: Optional[str] = None
     
     # LangChain / LangSmith

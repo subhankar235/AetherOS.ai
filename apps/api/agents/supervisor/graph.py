@@ -173,6 +173,48 @@ async def run_knowledge_agent(action: str, params: dict[str, Any]) -> dict[str, 
     }
 
 
+async def run_research_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    from agents.research_agent import run_research
+
+    company = params.get("company", "")
+    context = params.get("context") or params.get("_context", "")
+
+    logger.info(f"Running research_agent/{action}: company='{company}'")
+
+    if not company:
+        return {
+            "agent": "research_agent",
+            "status": "clarification_needed",
+            "result": {
+                "clarification": "Which company would you like me to research?",
+                "company": "",
+            },
+            "context_updates": {},
+            "requires_approval": False,
+        }
+
+    if action in ("run", "research"):
+        try:
+            return await run_research(company=company, context=context or None)
+        except Exception as exc:
+            logger.exception(f"Research agent failed: {exc}")
+            return {
+                "agent": "research_agent",
+                "status": "error",
+                "result": {"error": f"Research failed for '{company}': {str(exc)}"},
+                "context_updates": {},
+                "requires_approval": False,
+            }
+
+    return {
+        "agent": "research_agent",
+        "status": "error",
+        "result": {"error": f"Unknown research_agent action: '{action}'"},
+        "context_updates": {},
+        "requires_approval": False,
+    }
+
+
 async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"Stub agent runner: {agent}/{action} with params={params}")
 
@@ -227,17 +269,7 @@ async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> 
         }
 
     if agent == "research_agent":
-        return {
-            "agent": "research_agent",
-            "status": "completed",
-            "result": {
-                "message": f"Research completed for '{params.get('company', '')}'",
-                "executive_summary": f"{params.get('company', 'The company')} is a technology company...",
-                "swot": {"strengths": ["Strong product"], "weaknesses": [], "opportunities": [], "threats": []},
-            },
-            "context_updates": {},
-            "requires_approval": False,
-        }
+        return await run_research_agent(action, params)
 
     if agent == "support_agent":
         return {
@@ -265,7 +297,7 @@ async def execute_tasks_node(state: SupervisorState) -> dict[str, Any]:
     enriched = []
     for t in raw_tasks:
         task = t if isinstance(t, dict) else {"agent": t.agent, "action": t.action, "params": t.params}
-        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent"):
+        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent", "research_agent"):
             task.setdefault("params", {})["_user_id"] = state.get("user_id", "")
             task.setdefault("params", {})["_org_id"] = "default_org"
             task.setdefault("params", {})["_access_level"] = "Member"
