@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Qdrant Vector DB
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = ""
+    QDRANT_COLLECTION_COMPANY_MEMORY: str = "company_memory"
+    QDRANT_COLLECTION_RESEARCH_CACHE: str = "research_cache"
+    QDRANT_COLLECTION_SUPPORT_KB: str = "support_kb"
     
     # Sentry DSN
     SENTRY_DSN: Optional[str] = None
