@@ -196,8 +196,8 @@ def _fallback_classification(raw_input: str) -> dict[str, Any]:
             "clarification_text": None,
         }
 
-    # 2. Inbox search / fetch / recent keywords: search, find, show, list, open, read, email, mail, inbox, recent, past, give, get, fetch, unread, hrs, hours
-    if any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours"]):
+    # 2. Inbox search / fetch / recent keywords: search, find, show, list, open, read, email, mail, inbox, recent, past, give, get, fetch, unread, hrs, hours, from, form, frm
+    if any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours", "from", "form", "frm"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "inbox_agent", "action": "search", "params": {"query": raw_input}}],

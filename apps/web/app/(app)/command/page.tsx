@@ -7,7 +7,18 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { initialTranscript, type CommandTranscript } from "@/lib/mock-data";
-import { Mic, MicOff, Send, Sparkles, Volume2 } from "lucide-react";
+import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight } from "lucide-react";
+
+interface MatchedEmail {
+  id?: string;
+  gmail_message_id?: string;
+  sender: string;
+  subject: string;
+  summary?: string;
+  priority?: string;
+  category?: string;
+  received_at?: string;
+}
 
 export default function CommandCenter() {
   const { getToken } = useAuth();
@@ -18,6 +29,11 @@ export default function CommandCenter() {
 
   const [sessionId] = useState(() => crypto.randomUUID());
   const [loading, setLoading] = useState(false);
+
+  // Dedicated sidebar query results state
+  const [queryResults, setQueryResults] = useState<MatchedEmail[]>([]);
+  const [queryTitle, setQueryTitle] = useState<string>("");
+  const [selectedEmail, setSelectedEmail] = useState<MatchedEmail | null>(null);
 
   const send = async (mode: "voice" | "text") => {
     if (!input.trim() || loading) return;
@@ -62,7 +78,15 @@ export default function CommandCenter() {
       const respObj = data.response || {};
 
       let responseText = "Task completed successfully.";
-      if (respObj.status === "clarification_needed") {
+      
+      // Extract matched items for the sidebar panel
+      const items: MatchedEmail[] = respObj.result?.items || [];
+      if (items && items.length > 0) {
+        setQueryResults(items);
+        setQueryTitle(`Command Results: "${currentInput}"`);
+        setSelectedEmail(items[0]);
+        responseText = `Retrieved ${items.length} email(s) for your request. View detailed cards in the Results Sidebar ➔`;
+      } else if (respObj.status === "clarification_needed") {
         responseText = respObj.result?.clarification || "Could you please clarify your request?";
       } else if (respObj.result?.message) {
         responseText = respObj.result.message;
@@ -70,13 +94,8 @@ export default function CommandCenter() {
         responseText = respObj.result.summary;
       } else if (respObj.result?.answer) {
         responseText = respObj.result.answer;
-      } else if (respObj.result?.clarification) {
-        responseText = respObj.result.clarification;
       } else if (typeof respObj.result === "string") {
         responseText = respObj.result;
-      } else if (respObj.result?.items) {
-        responseText = `Found ${respObj.result.items.length} email(s):\n` +
-          respObj.result.items.map((i: any) => `• [${i.priority || 'Normal'}] ${i.subject} (${i.sender || 'Unknown'})`).join("\n");
       }
 
       const reply: CommandTranscript = {
@@ -108,19 +127,20 @@ export default function CommandCenter() {
   };
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1fr_360px]">
+    <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1fr_420px]">
+      {/* Main Command & Chat Section */}
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-semibold">Command Center</h1>
           <p className="text-sm text-muted-foreground">
-            Talk to Aether — by voice or text. Supervisor routes to the right agent.
+            Talk to Aether — voice or text commands route to AI agents.
           </p>
         </div>
 
         <Card className="flex flex-col items-center justify-center gap-4 p-8">
           <div className="relative">
             <div
-              className={`h-40 w-40 rounded-full bg-gradient-to-br from-primary via-primary/70 to-accent transition-all ${
+              className={`h-36 w-36 rounded-full bg-gradient-to-br from-primary via-primary/70 to-accent transition-all ${
                 speaking ? "scale-105 shadow-[0_0_60px_var(--color-primary)]" : ""
               } ${listening ? "animate-pulse" : ""}`}
             />
@@ -152,7 +172,7 @@ export default function CommandCenter() {
 
         <Card className="p-4">
           <div className="mb-3 text-xs font-medium text-muted-foreground">TRANSCRIPT</div>
-          <div className="max-h-[420px] space-y-3 overflow-y-auto pr-2">
+          <div className="max-h-[380px] space-y-3 overflow-y-auto pr-2">
             {transcript.map((m) => (
               <div
                 key={m.id}
@@ -180,7 +200,7 @@ export default function CommandCenter() {
 
           <div className="mt-3 flex gap-2">
             <Input
-              placeholder="Type a command, e.g. 'Reply to Sarah and keep it warm'"
+              placeholder="Type a command e.g. 'give me last 4 hour email' or 'show emails from Microsoft'"
               value={input}
               disabled={loading}
               onChange={(e) => setInput(e.target.value)}
@@ -193,44 +213,106 @@ export default function CommandCenter() {
         </Card>
       </div>
 
+      {/* Right Sidebar — Dynamic Command Results Panel */}
       <div className="space-y-4">
-        <Card className="p-4">
-          <div className="text-xs font-medium text-muted-foreground">HUMAN VOICE LAYER</div>
-          <ul className="mt-3 space-y-2 text-sm">
-            <li className="flex items-start gap-2">
-              <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-primary/30" /> Conversational rewrite (GPT-5.5)
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-primary/30" /> Tone adaptation
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-primary/30" /> ElevenLabs TTS
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-primary/30" /> Avatar mouth sync
-            </li>
-          </ul>
-        </Card>
-        <Card className="p-4">
-          <div className="text-xs font-medium text-muted-foreground">SUGGESTED COMMANDS</div>
-          <div className="mt-3 flex flex-col gap-1.5 text-sm">
-            {[
-              "What came in from investors this week?",
-              "Draft a reply to Marcus about the renewal",
-              "Schedule Sequoia for Thursday 3pm",
-              "Answer using our refund policy",
-              "Report on BigCo before I reply",
-            ].map((s) => (
-              <button
-                key={s}
-                onClick={() => setInput(s)}
-                className="rounded-md border border-border px-2.5 py-1.5 text-left text-xs hover:bg-sidebar-accent"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </Card>
+        {queryResults.length > 0 ? (
+          <Card className="p-4 border-primary/40 shadow-lg">
+            <div className="flex items-center justify-between border-b pb-2 mb-3">
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-primary uppercase tracking-wider">
+                  Command Result Sidebar
+                </span>
+              </div>
+              <Badge variant="outline" className="text-[10px]">
+                {queryResults.length} Items
+              </Badge>
+            </div>
+            
+            <p className="text-xs text-muted-foreground mb-3 font-medium">
+              {queryTitle}
+            </p>
+
+            <div className="max-h-[480px] overflow-y-auto space-y-2 pr-1">
+              {queryResults.map((item, idx) => (
+                <div
+                  key={item.id || item.gmail_message_id || idx}
+                  onClick={() => setSelectedEmail(item)}
+                  className={`p-3 rounded-lg border text-xs cursor-pointer transition-all hover:border-primary ${
+                    selectedEmail?.id === item.id ? "bg-primary/10 border-primary" : "bg-card border-border"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1 mb-1">
+                    <span className="font-semibold truncate text-foreground">
+                      {item.sender}
+                    </span>
+                    <Badge variant="outline" className="text-[9px] px-1 py-0">
+                      {item.priority || "Medium"}
+                    </Badge>
+                  </div>
+                  <div className="font-medium text-foreground truncate mb-1">
+                    {item.subject || "(no subject)"}
+                  </div>
+                  {item.summary && (
+                    <p className="text-muted-foreground line-clamp-2 text-[11px]">
+                      {item.summary}
+                    </p>
+                  )}
+                  {item.received_at && (
+                    <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      {new Date(item.received_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {selectedEmail && (
+              <div className="mt-3 p-3 bg-muted/40 rounded-lg border text-xs space-y-1">
+                <div className="font-semibold text-primary">Selected Email Details:</div>
+                <div><span className="text-muted-foreground">From:</span> {selectedEmail.sender}</div>
+                <div><span className="text-muted-foreground">Subject:</span> {selectedEmail.subject}</div>
+                {selectedEmail.summary && (
+                  <div className="mt-1 text-muted-foreground bg-background p-2 rounded border">
+                    {selectedEmail.summary}
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+        ) : (
+          <>
+            <Card className="p-4">
+              <div className="text-xs font-medium text-muted-foreground">COMMAND RESULTS PANEL</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                When you issue an email query command (e.g. <em>"give me last 4 hour email"</em>), the matched email cards will render cleanly right here in this sidebar!
+              </p>
+            </Card>
+
+            <Card className="p-4">
+              <div className="text-xs font-medium text-muted-foreground">TRY THESE COMMANDS</div>
+              <div className="mt-3 flex flex-col gap-1.5 text-sm">
+                {[
+                  "give me last 4 hour email",
+                  "show emails from Google",
+                  "give me 10 emails",
+                  "find emails about Microsoft",
+                  "show recent newsletter emails",
+                ].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setInput(s)}
+                    className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-left text-xs hover:bg-sidebar-accent hover:border-primary/50 transition-all"
+                  >
+                    <span>{s}</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </>
+        )}
       </div>
     </div>
   );

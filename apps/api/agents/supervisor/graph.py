@@ -1,6 +1,8 @@
 import logging
 import uuid
 from typing import Any, Literal, Optional
+import datetime
+import re
 
 from langgraph.graph import StateGraph, START, END
 from typing_extensions import TypedDict
@@ -258,6 +260,52 @@ async def run_support_agent(action: str, params: dict[str, Any]) -> dict[str, An
     }
 
 
+def _build_gmail_query(query: str) -> tuple[str, datetime.timedelta | None]:
+    import re
+    import datetime
+    if not query:
+        return "newer_than:30d", None
+
+    lowered = query.lower()
+
+    # Typo corrections
+    typo_map = {
+        "form": "from",
+        "frm": "from",
+        "nakuri": "naukri",
+        "nakri": "naukri",
+        "gogle": "google",
+        "microsft": "microsoft",
+        "linkdin": "linkedin",
+    }
+    for typo, fix in typo_map.items():
+        if typo in lowered:
+            lowered = lowered.replace(typo, fix)
+
+    # 1. Match hours e.g. "4 hrs", "4 hours", "4h"
+    m_hrs = re.search(r'(\d+)\s*(?:hrs?|hours?)', lowered)
+    if m_hrs:
+        hours = int(m_hrs.group(1))
+        return f"newer_than:{hours}h", datetime.timedelta(hours=hours)
+
+    # 2. Match days e.g. "2 days", "2d"
+    m_days = re.search(r'(\d+)\s*(?:days?)', lowered)
+    if m_days:
+        days = int(m_days.group(1))
+        return f"newer_than:{days}d", datetime.timedelta(days=days)
+
+    # 3. Match general recent keywords
+    if any(k in lowered for k in ["recent", "past", "last", "latest", "unread"]):
+        return "newer_than:7d", datetime.timedelta(days=7)
+
+    # 4. Sender / org / search terms e.g. "from Google" -> "from:Google"
+    clean_term = lowered.replace("show", "").replace("all", "").replace("emails", "").replace("email", "").replace("from", "").replace("get", "").replace("give", "").replace("me", "").replace("find", "").strip()
+    if clean_term:
+        return clean_term, None
+
+    return "newer_than:30d", None
+
+
 async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
     import datetime
     from db.session import AsyncSessionLocal
@@ -287,9 +335,9 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     if any_g:
                         uid = any_g.user_id
 
-                # Try live fetch from Gmail
+                # Try live fetch from Gmail using parsed query
+                gmail_query, time_delta = _build_gmail_query(query)
                 try:
-                    gmail_query = "newer_than:30d" if not query or "recent" in query.lower() else query
                     search_res = await search_messages(uid, gmail_query, None, db)
                     msgs = search_res.get("messages", [])
                     for msg in msgs[:50]:
@@ -351,9 +399,27 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
                 # Fallback to local DB if live fetch produced no new items or wasn't connected
                 if not items:
-                    stmt = select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(50)
+                    stmt = select(EmailMetadata)
+                    if time_delta:
+                        cutoff = datetime.datetime.now(datetime.timezone.utc) - time_delta
+                        stmt = stmt.where(EmailMetadata.received_at >= cutoff)
+                    elif query:
+                        lowered_q = query.lower()
+                        clean_term = lowered_q.replace("show", "").replace("all", "").replace("emails", "").replace("email", "").replace("from", "").replace("get", "").replace("give", "").replace("me", "").replace("find", "").replace("recent", "").replace("last", "").strip()
+                        if clean_term and len(clean_term) > 1:
+                            stmt = stmt.where(
+                                (EmailMetadata.sender.ilike(f"%{clean_term}%")) | 
+                                (EmailMetadata.subject.ilike(f"%{clean_term}%")) |
+                                (EmailMetadata.summary.ilike(f"%{clean_term}%"))
+                            )
+                    stmt = stmt.order_by(desc(EmailMetadata.received_at)).limit(50)
                     res = await db.execute(stmt)
                     emails = res.scalars().all()
+
+                    # Fallback to top recent emails if time_delta query produced 0 rows in DB
+                    if not emails and time_delta:
+                        res_fb = await db.execute(select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(10))
+                        emails = res_fb.scalars().all()
 
                     for em in emails:
                         items.append({
@@ -367,7 +433,9 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                             "received_at": em.received_at.isoformat() if em.received_at else None,
                         })
 
-            msg = f"Retrieved {len(items)} emails from inbox." if items else "No emails found. Google OAuth connection required. Please visit http://localhost:8000/integrations/google/connect in your browser to log into Google."
+            msg = f"Retrieved {len(items)} emails from inbox." if items else f"No emails found matching query '{query}'."
+
+
 
 
             return {
