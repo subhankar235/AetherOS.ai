@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,13 +10,17 @@ import { initialTranscript, type CommandTranscript } from "@/lib/mock-data";
 import { Mic, MicOff, Send, Sparkles, Volume2 } from "lucide-react";
 
 export default function CommandCenter() {
+  const { getToken } = useAuth();
   const [transcript, setTranscript] = useState<CommandTranscript[]>(initialTranscript);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
 
-  const send = (mode: "voice" | "text") => {
-    if (!input.trim()) return;
+  const [sessionId] = useState(() => crypto.randomUUID());
+  const [loading, setLoading] = useState(false);
+
+  const send = async (mode: "voice" | "text") => {
+    if (!input.trim() || loading) return;
     const userMsg: CommandTranscript = {
       id: crypto.randomUUID(),
       role: "user",
@@ -23,20 +28,82 @@ export default function CommandCenter() {
       content: input,
       at: new Date().toISOString(),
     };
-    const reply: CommandTranscript = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      mode,
-      content:
-        "Got it — routing that to the right agent. I'll show the result here and ask before doing anything consequential.",
-      agentUsed: "Supervisor",
-      at: new Date().toISOString(),
-    };
-    setTranscript((t) => [...t, userMsg, reply]);
+
+    const currentInput = input;
     setInput("");
-    if (mode === "voice") {
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 1800);
+    setLoading(true);
+    setTranscript((t) => [...t, userMsg]);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const formData = new FormData();
+      formData.append("command", currentInput);
+      formData.append("session_id", sessionId);
+
+      const token = await getToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      } else {
+        headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
+      }
+
+      const res = await fetch(`${apiUrl}/command`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+
+      if (!res.ok) {
+        throw new Error(`API error: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      const respObj = data.response || {};
+
+      let responseText = "Task completed successfully.";
+      if (respObj.status === "clarification_needed") {
+        responseText = respObj.result?.clarification || "Could you please clarify your request?";
+      } else if (respObj.result?.message) {
+        responseText = respObj.result.message;
+      } else if (respObj.result?.summary) {
+        responseText = respObj.result.summary;
+      } else if (respObj.result?.answer) {
+        responseText = respObj.result.answer;
+      } else if (respObj.result?.clarification) {
+        responseText = respObj.result.clarification;
+      } else if (typeof respObj.result === "string") {
+        responseText = respObj.result;
+      } else if (respObj.result?.items) {
+        responseText = `Found ${respObj.result.items.length} email(s):\n` +
+          respObj.result.items.map((i: any) => `• [${i.priority || 'Normal'}] ${i.subject} (${i.sender || 'Unknown'})`).join("\n");
+      }
+
+      const reply: CommandTranscript = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        mode,
+        content: responseText,
+        agentUsed: respObj.agent || "Supervisor",
+        at: new Date().toISOString(),
+      };
+      setTranscript((t) => [...t, reply]);
+    } catch (err: any) {
+      const reply: CommandTranscript = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        mode,
+        content: `Error connecting to AI Supervisor: ${err.message || "Failed to execute command"}`,
+        agentUsed: "Supervisor",
+        at: new Date().toISOString(),
+      };
+      setTranscript((t) => [...t, reply]);
+    } finally {
+      setLoading(false);
+      if (mode === "voice") {
+        setSpeaking(true);
+        setTimeout(() => setSpeaking(false), 1800);
+      }
     }
   };
 
@@ -115,11 +182,12 @@ export default function CommandCenter() {
             <Input
               placeholder="Type a command, e.g. 'Reply to Sarah and keep it warm'"
               value={input}
+              disabled={loading}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send("text")}
+              onKeyDown={(e) => e.key === "Enter" && !loading && send("text")}
             />
-            <Button onClick={() => send("text")}>
-              <Send className="h-4 w-4" />
+            <Button onClick={() => send("text")} disabled={loading || !input.trim()}>
+              <Send className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </Card>
