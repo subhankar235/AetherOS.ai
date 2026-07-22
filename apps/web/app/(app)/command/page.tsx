@@ -26,6 +26,7 @@ export default function CommandCenter() {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [resultType, setResultType] = useState<string>('default');
 
   const [sessionId] = useState(() => crypto.randomUUID());
   const [loading, setLoading] = useState(false);
@@ -74,6 +75,8 @@ export default function CommandCenter() {
         throw new Error(`API error: ${res.statusText}`);
       }
 
+      const resultTypeHeader = res.headers.get('X-Result-Type') || 'default';
+      setResultType(resultTypeHeader);
       const data = await res.json();
       const respObj = data.response || {};
 
@@ -230,6 +233,7 @@ export default function CommandCenter() {
             </div>
             
             <p className="text-xs text-muted-foreground mb-3 font-medium">
+              <Badge variant="outline" className="text-[10px] ml-2">{resultType}</Badge>
               {queryTitle}
             </p>
 

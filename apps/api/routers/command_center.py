@@ -34,17 +34,25 @@ async def text_command(
     context = get_default_context()
 
     try:
-        response = await supervisor_graph.run(
+        response_data = await supervisor_graph.run(
             user_id=str(user.id),
             session_id=active_session,
             raw_input=command,
             input_mode="text",
             conversation_context=context,
         )
-        return {
+        # Determine result type based on response content (simple heuristic)
+        result_type = "default"
+        if isinstance(response_data, dict):
+            # If the response contains items, assume it's a query result
+            if response_data.get("result", {}).get("items"):
+                result_type = "query"
+        from fastapi.responses import JSONResponse
+        from fastapi import Response
+        return Response(content=JSONResponse(content={
             "session_id": active_session,
-            "response": response,
-        }
+            "response": response_data,
+        }).body, media_type="application/json", headers={"X-Result-Type": result_type})
     except Exception as e:
         logger.exception(f"Supervisor failed for command: {command[:80]}")
         raise HTTPException(status_code=500, detail=f"Command processing failed: {str(e)}")

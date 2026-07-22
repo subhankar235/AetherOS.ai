@@ -1,9 +1,13 @@
 import logging
+import datetime
+from datetime import timedelta
 import uuid
 from typing import Optional
-import datetime
+# import datetime (duplicate removed)
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
+# duplicate FastAPI import removed
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +52,9 @@ async def gmail_webhook(request: Request):
 async def list_emails(
     priority: Optional[str] = Query(None, description="Filter by priority: High, Medium, Low"),
     category: Optional[str] = Query(None, description="Filter by category"),
+    sender: Optional[str] = Query(None, description="Filter by email sender (e.g., devfolio)"),
+    hours: Optional[int] = Query(None, description="Return emails from the last N hours"),
+    days: Optional[int] = Query(None, description="Return emails from the last N days"),
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
@@ -60,7 +67,15 @@ async def list_emails(
             stmt = stmt.where(EmailMetadata.priority == priority)
         if category:
             stmt = stmt.where(EmailMetadata.category == category)
-
+        if sender:
+            stmt = stmt.where(EmailMetadata.sender.ilike(f"%{sender}%"))
+        if hours is not None:
+            cutoff = datetime.datetime.utcnow() - timedelta(hours=hours)
+            stmt = stmt.where(EmailMetadata.received_at >= cutoff)
+        if days is not None:
+            cutoff = datetime.datetime.utcnow() - timedelta(days=days)
+            stmt = stmt.where(EmailMetadata.received_at >= cutoff)
+        
         stmt = stmt.order_by(desc(EmailMetadata.received_at)).offset(offset).limit(limit)
         result = await db.execute(stmt)
         items = result.scalars().all()
@@ -73,7 +88,17 @@ async def list_emails(
             stmt_fallback = stmt_fallback.order_by(desc(EmailMetadata.received_at)).offset(offset).limit(limit)
             result_fb = await db.execute(stmt_fallback)
             items = result_fb.scalars().all()
-        return items
+        email_responses = [EmailMetadataResponse.from_orm(item) for item in items]
+        # Determine result type for header
+        result_type = "default"
+        if sender:
+            result_type = "sender"
+        if hours or days:
+            result_type = "time" if result_type == "default" else "combined"
+        # Use FastAPI Response to add header
+        response = Response(content=JSONResponse(content=[e.dict() for e in email_responses]).body, media_type="application/json")
+        response.headers["X-Result-Type"] = result_type
+        return response
     except Exception as e:
         logger.error(f"Failed to list emails for user {user.id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve emails")
@@ -106,13 +131,30 @@ async def search_inbox(
     q: str = Query(..., description="Natural language search query"),
     page_token: Optional[str] = Query(None),
     limit: int = Query(25, ge=1, le=100),
+    hours: Optional[int] = Query(None, description="Return emails from the last N hours"),
+    days: Optional[int] = Query(None, description="Return emails from the last N days"),
+    sender: Optional[str] = Query(None, description="Filter by email sender (e.g., devfolio)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        # If any filter params are provided, fallback to list_emails for live filtering
+        if hours or days or sender:
+            return await list_emails(
+                priority=None,
+                category=None,
+                sender=sender,
+                limit=limit,
+                offset=0,
+                hours=hours,
+                days=days,
+                user=user,
+                db=db,
+            )
+        # Otherwise perform natural language search
         results = await natural_language_search(
             user_id=user.id,
-            query=q,
+            natural_query=q,
             page_token=page_token,
             db=db,
         )
