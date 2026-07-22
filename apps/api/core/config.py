@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = "your_google_client_id.apps.googleusercontent.com"
     GOOGLE_CLIENT_SECRET: str = "your_google_client_secret"
     GOOGLE_REDIRECT_URI: str = Field("http://localhost:8000/integrations/google/callback", alias="GOOGLE_REDIRECT_URI")
+    FRONTEND_BASE_URL: str = Field("http://localhost:3000", alias="FRONTEND_BASE_URL")
     GOOGLE_PUBSUB_VERIFICATION_TOKEN: str = Field("change_this_webhook_verification_token", alias="GOOGLE_PUBSUB_VERIFICATION_TOKEN")
     token_encryption_key: str = Field("change_this_to_a_32_byte_key", alias="TOKEN_ENCRYPTION_KEY")
     RATE_LIMIT_GMAIL_PER_MIN: int = Field(60, alias="RATE_LIMIT_GMAIL_PER_MIN")

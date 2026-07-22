@@ -157,12 +157,29 @@ def decrypt_token(encrypted_token: str) -> str:
         raise AppError(f"Token decryption failed: {str(exc)}")
 
 
-def generate_oauth_state(user_id: str) -> str:
+def generate_oauth_state(user_id: str, code_verifier: str | None = None) -> str:
     """
     Generates a secure, cryptographically signed state parameter for Google OAuth.
+    Optionally embeds the PKCE code_verifier so it survives cross-site redirects.
     """
     serializer = URLSafeSerializer(settings.SECRET_KEY, salt="oauth-state")
-    return serializer.dumps({"user_id": user_id})
+    payload = {"user_id": user_id}
+    if code_verifier:
+        payload["code_verifier"] = code_verifier
+    return serializer.dumps(payload)
+
+
+def verify_oauth_state_payload(state: str) -> dict:
+    """
+    Verifies the signature of the Google OAuth state parameter and returns the payload dict.
+    Raises AuthError if signature is invalid or expired.
+    """
+    serializer = URLSafeSerializer(settings.SECRET_KEY, salt="oauth-state")
+    try:
+        data = serializer.loads(state)
+        return data
+    except Exception as exc:
+        raise AuthError(f"Invalid or expired OAuth state: {str(exc)}")
 
 
 def verify_oauth_state(state: str) -> str:
@@ -170,9 +187,5 @@ def verify_oauth_state(state: str) -> str:
     Verifies the signature of the Google OAuth state parameter and returns the user ID.
     Raises AuthError if signature is invalid or expired.
     """
-    serializer = URLSafeSerializer(settings.SECRET_KEY, salt="oauth-state")
-    try:
-        data = serializer.loads(state)
-        return data["user_id"]
-    except Exception as exc:
-        raise AuthError(f"Invalid or expired OAuth state: {str(exc)}")
+    data = verify_oauth_state_payload(state)
+    return data["user_id"]

@@ -188,42 +188,48 @@ def _parse_llm_response(
 def _fallback_classification(raw_input: str) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
-    if lowered.startswith(("search", "find", "show", "list", "open", "read")):
+    # 1. Reply keywords / typos: reply, eply, rply, draft, compose, write, answer, respond
+    if any(k in lowered for k in ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"]):
+        return {
+            "intent": "single",
+            "tasks": [{"agent": "reply_agent", "action": "draft", "params": {"instructions": raw_input, "email_reference": "last email"}}],
+            "clarification_text": None,
+        }
+
+    # 2. Inbox search / fetch / recent keywords: search, find, show, list, open, read, email, mail, inbox, recent, past, give, get, fetch, unread, hrs, hours
+    if any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "inbox_agent", "action": "search", "params": {"query": raw_input}}],
             "clarification_text": None,
         }
 
-    if lowered.startswith(("reply", "draft", "compose", "write")):
-        return {
-            "intent": "single",
-            "tasks": [{"agent": "reply_agent", "action": "draft", "params": {"instructions": raw_input}}],
-            "clarification_text": None,
-        }
-
-    if lowered.startswith(("schedule", "meeting", "calendar", "book")):
+    # 3. Schedule / Calendar keywords: schedule, meeting, meet, calendar, book, slot, appointment
+    if any(k in lowered for k in ["schedule", "meeting", "meet", "calendar", "book", "slot", "appointment"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "calendar_agent", "action": "schedule", "params": {"description": raw_input}}],
             "clarification_text": None,
         }
 
-    if lowered.startswith(("research", "investigate", "look up")):
+    # 4. Research keywords: research, investigate, company, look up
+    if any(k in lowered for k in ["research", "investigate", "company", "look up"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "research_agent", "action": "run", "params": {"company": raw_input}}],
             "clarification_text": None,
         }
 
-    if lowered.startswith(("what", "how", "when", "where", "why", "tell me", "find in kb", "knowledge")):
+    # 5. Knowledge query keywords: what, how, when, where, why, tell me, kb, knowledge, doc, policy
+    if any(k in lowered for k in ["what", "how", "when", "where", "why", "tell me", "kb", "knowledge", "doc", "policy"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "knowledge_agent", "action": "query", "params": {"query": raw_input}}],
             "clarification_text": None,
         }
 
-    if lowered.startswith(("help", "what can you do", "tutorial", "guide")):
+    # 6. Support keywords: help, tutorial, guide, bug
+    if any(k in lowered for k in ["help", "tutorial", "guide", "bug"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "support_agent", "action": "help", "params": {"question": raw_input}}],
@@ -235,3 +241,4 @@ def _fallback_classification(raw_input: str) -> dict[str, Any]:
         "tasks": [],
         "clarification_text": "I'm not sure what you'd like to do. Try something like: 'Show my unread emails', 'Reply to the last email', 'Schedule a meeting', or 'Research Acme Corp'.",
     }
+

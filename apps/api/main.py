@@ -193,7 +193,7 @@ async def health_check():
 # Mount Routers
 app.include_router(webhooks.router)
 
-from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings
+from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings, replies
 from websocket import router as websocket_router
 app.include_router(integrations.router)
 app.include_router(inbox.router)
@@ -206,6 +206,7 @@ app.include_router(research.router)
 app.include_router(playbooks.router)
 app.include_router(vip_contacts.router)
 app.include_router(settings.router)
+app.include_router(replies.router)
 app.include_router(websocket_router)
 
 from fastapi import APIRouter, Depends

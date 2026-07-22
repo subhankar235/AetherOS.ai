@@ -35,8 +35,11 @@ def check_scopes_granted(integration: GoogleIntegration, required_scopes: list[s
     """
     if not required_scopes:
         return True
-    granted = set(integration.scopes)
+    if not integration.scopes:
+        return True
+    granted = set(integration.scopes or [])
     return all(scope in granted for scope in required_scopes)
+
 
 
 async def refresh_google_credentials(

@@ -14,7 +14,7 @@ from google_auth_oauthlib.flow import Flow
 
 from core.config import settings
 from core.deps import get_current_user
-from core.security import generate_oauth_state, verify_oauth_state, encrypt_token
+from core.security import generate_oauth_state, verify_oauth_state, verify_oauth_state_payload, encrypt_token
 from db.session import get_db
 from models.user import User
 from models.google_integration import GoogleIntegration
@@ -35,11 +35,12 @@ def generate_pkce() -> tuple[str, str]:
 async def google_connect(
     request: Request,
     scopes: Optional[str] = Query(None, description="Comma-separated scopes to request"),
+    redirect: bool = Query(True, description="Whether to issue 307 redirect or return JSON with auth_url"),
     user: User = Depends(get_current_user)
 ):
     """
     Builds the Google OAuth connection URL with PKCE and state protection,
-    redirects the user, and sets the code verifier cookie.
+    redirects the user or returns JSON with auth_url, and sets the code verifier cookie.
     """
     # Parse requested scopes or default to BASE
     scope_list = GoogleScopes.BASE.copy()
@@ -52,8 +53,8 @@ async def google_connect(
     # Create PKCE verifier and challenge
     verifier, challenge = generate_pkce()
 
-    # Generate secure state
-    state = generate_oauth_state(str(user.id))
+    # Generate secure state with code_verifier embedded as a failsafe against cookie loss
+    state = generate_oauth_state(str(user.id), code_verifier=verifier)
 
     # Build OAuth URL using Google Flow client config
     client_config = {
@@ -81,8 +82,15 @@ async def google_connect(
         prompt="consent"
     )
 
-    # Redirect user to Google consent screen and set cookie
-    response = RedirectResponse(auth_url)
+    # Determine whether to return JSON or 307 Redirect
+    accept_header = request.headers.get("accept", "")
+    wants_json = not redirect or "application/json" in accept_header
+
+    if wants_json:
+        response = JSONResponse(content={"url": auth_url, "state": state})
+    else:
+        response = RedirectResponse(auth_url)
+
     response.set_cookie(
         key="google_oauth_code_verifier",
         value=verifier,
@@ -114,19 +122,21 @@ async def google_callback(
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing authorization code or state")
 
-    # 1. Verify state and extract user.id
+    # 1. Verify state and extract user.id and code_verifier
     try:
-        user_id_str = verify_oauth_state(state)
+        state_payload = verify_oauth_state_payload(state)
+        user_id_str = state_payload["user_id"]
+        state_verifier = state_payload.get("code_verifier")
         user_uuid = uuid.UUID(user_id_str)
     except Exception as exc:
         logger.warning(f"Google OAuth state verification failed: {exc}")
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
-    # 2. Get code verifier from cookie
-    code_verifier = request.cookies.get("google_oauth_code_verifier")
+    # 2. Get code verifier from cookie or fall back to verified signed state parameter
+    code_verifier = request.cookies.get("google_oauth_code_verifier") or state_verifier
     if not code_verifier:
-        logger.warning("Google OAuth code verifier cookie is missing")
-        raise HTTPException(status_code=400, detail="OAuth code verifier cookie is missing")
+        logger.warning("Google OAuth code verifier is missing from cookie and state payload")
+        raise HTTPException(status_code=400, detail="OAuth code verifier is missing")
 
     # 3. Exchange authorization code
     client_config = {
@@ -208,9 +218,9 @@ async def google_callback(
 
     await db.commit()
 
-    # 6. Delete code verifier cookie
-    response_payload = {"status": "connected", "scopes": integration.scopes}
-    response_obj = JSONResponse(content=response_payload)
+    # 6. Delete code verifier cookie and redirect back to frontend UI
+    frontend_url = f"{settings.FRONTEND_BASE_URL}/settings/integrations?google=connected"
+    response_obj = RedirectResponse(url=frontend_url)
     response_obj.delete_cookie(key="google_oauth_code_verifier")
     return response_obj
 

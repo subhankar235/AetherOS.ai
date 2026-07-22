@@ -28,8 +28,8 @@ class EmailMetadataUpdate(BaseModel):
 
 class EmailMetadataResponse(EmailMetadataBase):
     id: uuid.UUID
-    user_id: str
-    thread_id: Optional[uuid.UUID]
+    user_id: uuid.UUID | str
+    thread_id: Optional[uuid.UUID] = None
     indexed_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

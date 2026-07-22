@@ -74,25 +74,30 @@ async def test_get_current_user_invalid_clerk_session():
 
 
 @pytest.mark.asyncio
-async def test_get_current_user_not_synced():
+async def test_get_current_user_defensive_backstop():
     mock_request = MagicMock(spec=Request)
     mock_db = MagicMock(spec=AsyncSession)
 
     mock_claims = MagicMock()
     mock_claims.user_id = "clerk_unknown"
+    mock_claims.raw = {"email": "unknown@example.com"}
 
-    # Mock DB query to return None (user not found)
+    # Mock DB query to return None (user not found initially)
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = None
     mock_db.execute = AsyncMock(return_value=mock_result)
 
     with patch("core.deps.extract_bearer_token", return_value="valid_token"), \
-         patch("core.deps.verify_clerk_session", return_value=mock_claims):
+         patch("core.deps.verify_clerk_session", return_value=mock_claims), \
+         patch("core.deps.set_user_id"):
         
-        with pytest.raises(AuthError) as exc_info:
-            await get_current_user(mock_request, mock_db)
+        user = await get_current_user(mock_request, mock_db)
         
-        assert "User not yet synced" in exc_info.value.message
+        assert user is not None
+        assert user.clerk_user_id == "clerk_unknown"
+        assert user.email == "unknown@example.com"
+        mock_db.add.assert_called_once()
+        mock_db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio

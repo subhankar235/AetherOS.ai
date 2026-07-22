@@ -97,10 +97,20 @@ async def get_current_user(
         logger.exception("Unexpected error checking database for user")
         raise AppError(f"Unexpected authentication database lookup error: {str(exc)}")
 
-    # 4. Handle non-existent user
+    # 4. Handle non-existent user (Defensive backstop per PRD 5.3)
     if user is None:
-        logger.warning(f"Clerk user ID '{claims.user_id}' not found in local database")
-        raise AuthError("User not yet synced — please retry shortly")
+        logger.info(f"Clerk user ID '{claims.user_id}' not found in local DB; running defensive backstop creation")
+        import uuid
+        user_email = claims.raw.get("email") or claims.raw.get("email_address") or f"{claims.user_id}@clerk.user"
+        user = User(
+            id=uuid.uuid4(),
+            clerk_user_id=claims.user_id,
+            email=user_email,
+            role=UserRole.MEMBER
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
     # 5. Populate logging context for downstream tracing
     set_user_id(str(user.id))

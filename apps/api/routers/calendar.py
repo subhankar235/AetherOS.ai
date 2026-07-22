@@ -1,75 +1,99 @@
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timezone, timedelta
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.deps import get_current_user
 from core.exceptions import ExternalServiceError, ApprovalRequiredError
 from db.session import get_db
 from models.user import User
-from agents.calendar_agent import extract_meeting_details, check_availability, compute_free_slots, preview_event, confirm_event
+from models.meeting import Meeting
+from agents.calendar_agent.extractor import extract_meeting_details, MeetingDetails, build_search_windows
+from agents.calendar_agent.availability import check_availability, compute_free_slots
+from agents.calendar_agent.event_creator import (
+    preview_event,
+    confirm_event,
+    request_approval_for_event,
+    _build_event_body,
+)
 
 logger = logging.getLogger("routers.calendar")
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
 
+class ExtractRequest(BaseModel):
+    text: str = Field(..., description="Natural language scheduling request")
+    user_timezone: str = Field("UTC", description="User timezone e.g. America/New_York")
+
+
+class AvailabilityRequest(BaseModel):
+    preferred_date: Optional[str] = Field(None, description="YYYY-MM-DD format")
+    preferred_time: Optional[str] = Field(None, description="HH:MM format")
+    duration_minutes: int = Field(60, ge=15, le=480)
+    participants: list[str] = Field(default_factory=list)
+    user_timezone: str = Field("UTC")
+
+
+class PreviewRequest(BaseModel):
+    title: str
+    start_time: str
+    end_time: str
+    duration_minutes: int = 60
+    participants: list[str] = Field(default_factory=list)
+    description: Optional[str] = None
+    generate_meet: bool = False
+    source_email_id: Optional[uuid.UUID] = None
+
+
+class ConfirmRequest(BaseModel):
+    approval_id: uuid.UUID
+    preview_id: str
+    event_body: Optional[dict[str, Any]] = None
+
+
 @router.post("/extract")
 async def extract_meeting(
-    text: str = Form(..., description="Natural language scheduling request"),
+    req: ExtractRequest,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     try:
-        details = await extract_meeting_details(text)
+        details = await extract_meeting_details(req.text, user_timezone=req.user_timezone)
         return details
     except Exception as e:
         logger.error(f"Meeting extraction failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to extract meeting details")
+        raise HTTPException(status_code=500, detail=f"Failed to extract meeting details: {str(e)}")
 
 
 @router.post("/availability")
 async def get_availability(
-    start: str = Form(..., description="ISO 8601 start of window"),
-    end: str = Form(..., description="ISO 8601 end of window"),
-    participants: Optional[str] = Form(None, description="Comma-separated email addresses"),
+    req: AvailabilityRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        time_min = datetime.fromisoformat(start)
-        time_max = datetime.fromisoformat(end)
-
-        participant_list = []
-        if participants:
-            participant_list = [p.strip() for p in participants.split(",") if p.strip()]
-
-        busy = await check_availability(
+        windows = build_search_windows(
+            preferred_date=req.preferred_date,
+            preferred_time=req.preferred_time,
+            timezone_str=req.user_timezone,
+        )
+        
+        calendar_ids = ["primary"] + [p for p in req.participants if "@" in p]
+        
+        result = await check_availability(
             user_id=user.id,
-            calendar_ids=[str(user.email)] + participant_list,
-            time_min=time_min,
-            time_max=time_max,
+            calendar_ids=calendar_ids,
+            search_windows=windows,
+            duration_minutes=req.duration_minutes,
+            user_timezone=req.user_timezone,
             db=db,
         )
-
-        slots = await compute_free_slots(
-            user_id=user.id,
-            busy_data=busy,
-            time_min=time_min,
-            time_max=time_max,
-            db=db,
-        )
-
-        return {
-            "time_min": time_min.isoformat(),
-            "time_max": time_max.isoformat(),
-            "busy_periods": busy,
-            "free_slots": slots,
-        }
+        return result
     except ExternalServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
@@ -79,49 +103,71 @@ async def get_availability(
 
 @router.post("/preview")
 async def preview_calendar_event(
-    title: str = Form(...),
-    start_time: str = Form(...),
-    end_time: str = Form(...),
-    participants: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    add_meet: bool = Form(False),
+    req: PreviewRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    participant_list = []
-    if participants:
-        participant_list = [p.strip() for p in participants.split(",") if p.strip()]
-
     try:
-        preview = await preview_event(
-            user_id=user.id,
-            title=title,
-            start_time=datetime.fromisoformat(start_time),
-            end_time=datetime.fromisoformat(end_time),
-            participants=participant_list,
-            description=description or "",
-            add_meet=add_meet,
-            db=db,
+        meeting_details = MeetingDetails(
+            title=req.title,
+            duration_minutes=req.duration_minutes,
+            participants=req.participants,
+            description=req.description,
         )
+        
+        preview = await preview_event(
+            db=db,
+            user_id=user.id,
+            meeting=meeting_details,
+            slot_start=req.start_time,
+            slot_end=req.end_time,
+            generate_meet=req.generate_meet,
+            source_email_id=req.source_email_id,
+        )
+        
+        approval_id = await request_approval_for_event(
+            db=db,
+            user_id=user.id,
+            preview_result=preview,
+        )
+        
+        preview["approval_id"] = str(approval_id)
         return preview
     except ExternalServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Event preview failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to preview event")
+        raise HTTPException(status_code=500, detail=f"Failed to preview event: {str(e)}")
 
 
 @router.post("/confirm")
 async def confirm_calendar_event(
-    approval_id: str = Form(...),
+    req: ConfirmRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        event_body = req.event_body
+        if not event_body:
+            meeting_uuid = uuid.UUID(req.preview_id)
+            stmt = select(Meeting).where(Meeting.id == meeting_uuid, Meeting.user_id == user.id)
+            res = await db.execute(stmt)
+            m = res.scalar_one_or_none()
+            if not m or not m.proposed_slots:
+                raise HTTPException(status_code=404, detail="Preview meeting record not found")
+            slot = m.proposed_slots[0]
+            meeting_details = MeetingDetails(
+                title=slot.get("title", "Meeting"),
+                participants=[p.get("email") or p.get("displayName") for p in m.participants if isinstance(p, dict) and (p.get("email") or p.get("displayName"))],
+            )
+            event_body = await _build_event_body(meeting_details, slot["start"], slot["end"], generate_meet=True)
+
         result = await confirm_event(
-            approval_id=uuid.UUID(approval_id),
-            user_id=user.id,
             db=db,
+            user_id=user.id,
+            preview_id=req.preview_id,
+            approval_id=req.approval_id,
+            event_body=event_body,
         )
         return result
     except ApprovalRequiredError as e:
@@ -130,4 +176,19 @@ async def confirm_calendar_event(
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Event confirmation failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to confirm event")
+        raise HTTPException(status_code=500, detail=f"Failed to confirm event: {str(e)}")
+
+
+@router.get("/meetings")
+async def list_meetings(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        stmt = select(Meeting).where(Meeting.user_id == user.id).order_by(desc(Meeting.created_at))
+        res = await db.execute(stmt)
+        meetings = res.scalars().all()
+        return meetings
+    except Exception as e:
+        logger.error(f"Failed to list meetings for user {user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list meetings")

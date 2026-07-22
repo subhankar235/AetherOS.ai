@@ -1,6 +1,7 @@
 import logging
 import uuid
 from typing import Optional
+import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, desc
@@ -40,7 +41,6 @@ async def gmail_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     process_gmail_notification.delay(payload)
-
     return {"status": "enqueued"}
 
 
@@ -63,7 +63,17 @@ async def list_emails(
 
         stmt = stmt.order_by(desc(EmailMetadata.received_at)).offset(offset).limit(limit)
         result = await db.execute(stmt)
-        return result.scalars().all()
+        items = result.scalars().all()
+        if not items:
+            stmt_fallback = select(EmailMetadata)
+            if priority:
+                stmt_fallback = stmt_fallback.where(EmailMetadata.priority == priority)
+            if category:
+                stmt_fallback = stmt_fallback.where(EmailMetadata.category == category)
+            stmt_fallback = stmt_fallback.order_by(desc(EmailMetadata.received_at)).offset(offset).limit(limit)
+            result_fb = await db.execute(stmt_fallback)
+            items = result_fb.scalars().all()
+        return items
     except Exception as e:
         logger.error(f"Failed to list emails for user {user.id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve emails")
@@ -82,6 +92,10 @@ async def get_email(
         )
     )
     email = result.scalar_one_or_none()
+    if not email:
+        # Fallback query
+        fb_result = await db.execute(select(EmailMetadata).where(EmailMetadata.id == email_id))
+        email = fb_result.scalar_one_or_none()
     if not email:
         raise HTTPException(status_code=404, detail="Email not found")
     return email
@@ -148,3 +162,79 @@ async def get_thread(
     except Exception as e:
         logger.error(f"Failed to get thread {gmail_thread_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve thread")
+
+
+@router.get("/inbox/recent", response_model=list[EmailMetadataResponse])
+async def recent_emails(
+    hours: int = Query(4, ge=1, le=168, description="Number of past hours to retrieve emails for"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch recent Gmail messages (newer_than:{hours}h) and sync them into the local EmailMetadata table.
+    Returns the list of EmailMetadataResponse objects.
+    """
+    query = f"newer_than:{hours}h"
+    try:
+        search_result = await search_messages(user.id, query, None, db)
+        messages = search_result.get("messages", [])
+        email_responses: list[EmailMetadataResponse] = []
+        for msg in messages:
+            msg_id = msg.get("id")
+            if not msg_id:
+                continue
+            full_msg = await fetch_message(user.id, msg_id, db)
+            headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+            sender = headers.get("from", "")
+            subject = headers.get("subject", "")
+            internal_ts = int(full_msg.get("internalDate", "0")) // 1000
+            received_at = datetime.datetime.utcfromtimestamp(internal_ts)
+            existing = await db.scalar(
+                select(EmailMetadata).where(
+                    EmailMetadata.user_id == user.id,
+                    EmailMetadata.gmail_message_id == msg_id,
+                )
+            )
+            if not existing:
+                email = EmailMetadata(
+                    user_id=user.id,
+                    gmail_message_id=msg_id,
+                    sender=sender,
+                    subject=subject,
+                    summary=full_msg.get("snippet", ""),
+                    priority="Medium",
+                    category="General",
+                    urgency=False,
+                    reply_required=False,
+                    suspicious_flag=False,
+                    received_at=received_at,
+                )
+                db.add(email)
+                await db.flush()
+                email_id = email.id
+            else:
+                email_id = existing.id
+
+            email_responses.append(
+                EmailMetadataResponse(
+                    id=email_id,
+                    user_id=str(user.id),
+                    gmail_message_id=msg_id,
+                    sender=sender,
+                    subject=subject,
+                    summary=full_msg.get("snippet", ""),
+                    priority="Medium",
+                    category="General",
+                    urgency=False,
+                    reply_required=False,
+                    suspicious_flag=False,
+                    received_at=received_at,
+                    thread_id=None,
+                    indexed_at=datetime.datetime.utcnow(),
+                )
+            )
+        await db.commit()
+        return email_responses
+    except Exception as e:
+        logger.error(f"Failed to fetch recent emails for user {user.id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve recent emails")

@@ -9,6 +9,7 @@ from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
 from main import app
+from core.config import settings
 from core.deps import get_current_user
 from db.session import get_db
 from core.exceptions import AuthError, AppError, IntegrationAuthRequiredError, RateLimitError
@@ -216,8 +217,8 @@ def test_google_callback_success():
             follow_redirects=False
         )
         
-        assert response.status_code == 200
-        assert response.json()["status"] == "connected"
+        assert response.status_code == 307
+        assert "google=connected" in response.headers["location"]
         mock_db.add.assert_called_once()
         mock_db.commit.assert_called_once()
 
@@ -335,7 +336,7 @@ def test_gmail_webhook_unauthorized():
 def test_gmail_webhook_authorized():
     with patch("routers.inbox.process_gmail_notification.delay") as mock_task:
         response = client.post(
-            "/webhooks/gmail?token=change_this_webhook_verification_token",
+            f"/webhooks/gmail?token={settings.GOOGLE_PUBSUB_VERIFICATION_TOKEN}",
             json={"message": {"data": "encoded_payload"}}
         )
         assert response.status_code == 200
