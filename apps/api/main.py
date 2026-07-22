@@ -23,6 +23,36 @@ app = FastAPI(
     debug=settings.DEBUG,
 )
 
+# Startup event to initialize vector collections
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Initializing Qdrant collections on startup...")
+    try:
+        from integrations.qdrant_client import qdrant_client
+        await qdrant_client.init_collections()
+        logger.info("Qdrant collections initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Qdrant collections on startup: {str(e)}")
+
+    logger.info("Starting WebSocket event broadcaster...")
+    try:
+        from websocket.events import event_broadcaster
+        await event_broadcaster.start()
+        logger.info("WebSocket event broadcaster started.")
+    except Exception as e:
+        logger.error(f"Failed to start WebSocket event broadcaster: {str(e)}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Stopping WebSocket event broadcaster...")
+    try:
+        from websocket.events import event_broadcaster
+        await event_broadcaster.stop()
+        logger.info("WebSocket event broadcaster stopped.")
+    except Exception as e:
+        logger.error(f"Error stopping WebSocket event broadcaster: {str(e)}")
+
 # Register CORS middleware (locked to known origins from settings)
 app.add_middleware(
     CORSMiddleware,
@@ -163,9 +193,20 @@ async def health_check():
 # Mount Routers
 app.include_router(webhooks.router)
 
-from routers import integrations, inbox
+from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings
+from websocket import router as websocket_router
 app.include_router(integrations.router)
 app.include_router(inbox.router)
+app.include_router(knowledge.router)
+app.include_router(payments.router)
+app.include_router(dashboard.router)
+app.include_router(command_center.router)
+app.include_router(calendar.router)
+app.include_router(research.router)
+app.include_router(playbooks.router)
+app.include_router(vip_contacts.router)
+app.include_router(settings.router)
+app.include_router(websocket_router)
 
 from fastapi import APIRouter, Depends
 from core.deps import get_current_user

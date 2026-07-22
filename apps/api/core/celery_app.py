@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from core.config import settings
 
 celery_app = Celery(
@@ -13,4 +14,11 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "refresh-research-cache-every-6-hours": {
+            "task": "workers.research_cache_refresh.refresh_research_cache",
+            "schedule": crontab(hour="*/6"),
+            "options": {"queue": "periodic"},
+        },
+    },
 )

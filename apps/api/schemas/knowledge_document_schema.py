@@ -21,9 +21,9 @@ class KnowledgeDocumentUpdate(BaseModel):
 class KnowledgeDocumentResponse(KnowledgeDocumentBase):
     id: uuid.UUID
     org_id: Optional[str]
-    user_id: Optional[str]
+    user_id: Optional[uuid.UUID]
     indexing_status: str
-    uploaded_by: Optional[str]
+    uploaded_by: Optional[uuid.UUID]
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

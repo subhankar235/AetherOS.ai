@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 import "@/styles/globals.css";
 
 const inter = Inter({
@@ -29,12 +30,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} dark`}
-      suppressHydrationWarning
+    <ClerkProvider
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
     >
-      <body className="min-h-screen font-sans antialiased">{children}</body>
-    </html>
+      <html
+        lang="en"
+        className={`${inter.variable} ${jetbrainsMono.variable} dark`}
+        suppressHydrationWarning
+        data-scroll-behavior="smooth"
+      >
+        <body className="min-h-screen font-sans antialiased">{children}</body>
+      </html>
+    </ClerkProvider>
   );
 }

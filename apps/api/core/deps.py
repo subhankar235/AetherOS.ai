@@ -41,6 +41,32 @@ async def get_current_user(
     # 1. Extract Bearer token
     try:
         token = extract_bearer_token(request)
+        
+        # Developer local-testing bypass
+        from core.config import settings
+        if settings.APP_ENV == "development" and token.startswith("dev-token-"):
+            import uuid
+            email = token.removeprefix("dev-token-").strip()
+            
+            # Check database for existing dev user
+            result = await db.execute(select(User).where(User.email == email))
+            user = result.scalar_one_or_none()
+            if not user:
+                # Auto-create the dev user to avoid 404
+                user = User(
+                    id=uuid.uuid4(),
+                    clerk_user_id=f"clerk_dev_{email.split('@')[0]}",
+                    email=email,
+                    role=UserRole.MEMBER
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+                logger.info(f"Auto-created dev user '{email}' with ID '{user.id}'")
+            
+            set_user_id(str(user.id))
+            return user
+
     except AuthError as exc:
         logger.warning(f"Authentication token extraction failed: {exc.message}")
         raise exc

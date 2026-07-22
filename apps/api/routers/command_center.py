@@ -1,0 +1,99 @@
+import json
+import logging
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.deps import get_current_user
+from core.exceptions import ExternalServiceError
+from db.session import get_db
+from models.user import User
+from agents.supervisor import supervisor_graph
+from agents.supervisor.context_manager import get_default_context
+from voice.stt_client import SpeechToTextClient
+from voice.tts_client import TextToSpeechClient
+
+logger = logging.getLogger("routers.command_center")
+
+router = APIRouter(prefix="/command", tags=["command_center"])
+
+stt_client = SpeechToTextClient()
+tts_client = TextToSpeechClient()
+
+
+@router.post("")
+async def text_command(
+    command: str = Form(..., description="Natural language command text"),
+    session_id: Optional[str] = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    active_session = session_id or str(uuid.uuid4())
+    context = get_default_context()
+
+    try:
+        response = await supervisor_graph.run(
+            user_id=str(user.id),
+            session_id=active_session,
+            raw_input=command,
+            input_mode="text",
+            conversation_context=context,
+        )
+        return {
+            "session_id": active_session,
+            "response": response,
+        }
+    except Exception as e:
+        logger.exception(f"Supervisor failed for command: {command[:80]}")
+        raise HTTPException(status_code=500, detail=f"Command processing failed: {str(e)}")
+
+
+@router.post("/voice")
+async def voice_command(
+    audio: UploadFile = File(..., description="Audio file for speech-to-text"),
+    session_id: Optional[str] = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    active_session = session_id or str(uuid.uuid4())
+
+    try:
+        audio_bytes = await audio.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read audio file: {str(e)}")
+
+    async def audio_generator():
+        yield audio_bytes
+
+    try:
+        final_transcript = ""
+        async for update in stt_client.transcribe_stream(audio_generator()):
+            if update.get("type") == "final":
+                final_transcript = update.get("text", "").strip()
+    except Exception as e:
+        logger.error(f"STT failed for voice command: {e}")
+        raise HTTPException(status_code=502, detail=f"Speech-to-text failed: {str(e)}")
+
+    if not final_transcript:
+        raise HTTPException(status_code=400, detail="No speech detected in audio")
+
+    context = get_default_context()
+
+    try:
+        response = await supervisor_graph.run(
+            user_id=str(user.id),
+            session_id=active_session,
+            raw_input=final_transcript,
+            input_mode="voice",
+            conversation_context=context,
+        )
+        return {
+            "session_id": active_session,
+            "transcript": final_transcript,
+            "response": response,
+        }
+    except Exception as e:
+        logger.exception(f"Supervisor failed for voice command: {final_transcript[:80]}")
+        raise HTTPException(status_code=500, detail=f"Voice command processing failed: {str(e)}")
