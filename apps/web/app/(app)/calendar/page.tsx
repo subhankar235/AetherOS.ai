@@ -34,6 +34,12 @@ interface MeetingRecord {
     sender?: string;
     id?: string;
   };
+  source_email?: {
+    subject?: string;
+    from?: { name?: string; email?: string };
+    summary?: string;
+    message_id?: string;
+  };
   created_at: string;
 }
 
