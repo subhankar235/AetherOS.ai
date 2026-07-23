@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 import base64
 import logging
@@ -31,19 +32,19 @@ async def _get_gmail_service(user_id: uuid.UUID, db: AsyncSession, required_scop
 @gmail_retry
 async def fetch_message(user_id: uuid.UUID, message_id: str, db: AsyncSession) -> dict:
     """
-    Fetches a single Gmail message by ID.
+    Fetches a single Gmail message by ID asynchronously without blocking loop.
     """
     await limiter.check_rate_limit(f"gmail:{user_id}", limit=settings.RATE_LIMIT_GMAIL_PER_MIN, period=60)
     service = await _get_gmail_service(user_id, db, [GoogleScopes.BASE[3]])
     
-    # Run synchronous execution in an executor or execute directly (async-compatible thread safety)
-    return service.users().messages().get(userId="me", id=message_id, format="full").execute()
+    req = service.users().messages().get(userId="me", id=message_id, format="full")
+    return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=8.0)
 
 
 @gmail_retry
 async def search_messages(user_id: uuid.UUID, query: str, page_token: str | None, db: AsyncSession) -> dict:
     """
-    Searches Gmail messages based on query.
+    Searches Gmail messages based on query asynchronously without blocking loop.
     """
     await limiter.check_rate_limit(f"gmail:{user_id}", limit=settings.RATE_LIMIT_GMAIL_PER_MIN, period=60)
     service = await _get_gmail_service(user_id, db, [GoogleScopes.BASE[3]])
@@ -52,7 +53,8 @@ async def search_messages(user_id: uuid.UUID, query: str, page_token: str | None
     if page_token:
         kwargs["pageToken"] = page_token
         
-    return service.users().messages().list(**kwargs).execute()
+    req = service.users().messages().list(**kwargs)
+    return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=8.0)
 
 
 @gmail_retry
