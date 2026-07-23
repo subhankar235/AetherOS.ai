@@ -39,6 +39,10 @@ class SendDraftRequest(BaseModel):
     approval_id: uuid.UUID
 
 
+class SaveDraftBodyRequest(BaseModel):
+    current_body: str
+
+
 @router.post("/drafts")
 async def create_reply_draft(
     req: GenerateDraftRequest,
@@ -98,12 +102,35 @@ async def list_drafts(
             "version_history": d.version_history,
             "status": d.status,
             "created_at": d.created_at.isoformat() if d.created_at else None,
-            "recipient": email_meta.sender if email_meta else None,
-            "subject": email_meta.subject if email_meta else None,
-            "original_body": email_meta.summary if email_meta else None,
+            "recipient": (email_meta.sender if email_meta and email_meta.sender else None) or "Recipient",
+            "subject": (email_meta.subject if email_meta and email_meta.subject else None) or "Reply Draft",
+            "original_body": (email_meta.summary if email_meta and email_meta.summary else None) or "Original Email Content",
             "original_received_at": email_meta.received_at.isoformat() if email_meta and email_meta.received_at else None,
         })
     return output
+
+
+@router.put("/drafts/{draft_id}")
+async def save_draft_body(
+    draft_id: uuid.UUID,
+    req: SaveDraftBodyRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await db.execute(select(Draft).where(Draft.id == draft_id))
+        draft = result.scalar_one_or_none()
+        if not draft:
+            raise NotFoundError(f"Draft {draft_id} not found")
+        draft.current_body = req.current_body
+        await db.commit()
+        return {"status": "updated", "draft_id": str(draft_id), "body": draft.current_body}
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to update draft {draft_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to update draft: {str(e)}")
+
 
 
 @router.post("/drafts/{draft_id}/edit")

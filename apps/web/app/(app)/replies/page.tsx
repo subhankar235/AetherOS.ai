@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ export default function RepliesPage() {
   const [drafts, setDrafts] = useState<DraftItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const isUserEditingRef = useRef<Set<string>>(new Set());
 
   const getHeaders = async () => {
     const token = await getToken();
@@ -39,9 +40,10 @@ export default function RepliesPage() {
   };
 
   const fetchDrafts = async () => {
-    let cached: DraftItem[] = [];
+    let cachedMap = new Map<string, DraftItem>();
     try {
-      cached = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
+      const cachedArr: DraftItem[] = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
+      cachedArr.forEach((c) => cachedMap.set(c.id, c));
     } catch (e) {}
 
     try {
@@ -49,10 +51,37 @@ export default function RepliesPage() {
       const headers = await getHeaders();
       const res = await fetch(`${apiUrl}/replies/drafts`, { headers });
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setDrafts(data);
-          localStorage.setItem("active_drafts_cache", JSON.stringify(data));
+        const data: DraftItem[] = await res.json();
+        if (Array.isArray(data)) {
+          setDrafts((currentDrafts) => {
+            const currentMap = new Map<string, DraftItem>();
+            currentDrafts.forEach((d) => currentMap.set(d.id, d));
+
+            const updatedList: DraftItem[] = data.map((apiItem) => {
+              const existingLocal = currentMap.get(apiItem.id);
+              // Preserve local body if user is actively typing
+              if (
+                existingLocal &&
+                existingLocal.body !== apiItem.body &&
+                isUserEditingRef.current.has(apiItem.id)
+              ) {
+                return { ...apiItem, body: existingLocal.body };
+              }
+              return apiItem;
+            });
+
+            // Include any locally generated draft from command page not yet in DB response
+            cachedMap.forEach((cachedItem, id) => {
+              if (!updatedList.some((d) => d.id === id) && cachedItem.status === "drafting") {
+                updatedList.push(cachedItem);
+              }
+            });
+
+            try {
+              localStorage.setItem("active_drafts_cache", JSON.stringify(updatedList));
+            } catch (e) {}
+            return updatedList;
+          });
           return;
         }
       }
@@ -60,11 +89,9 @@ export default function RepliesPage() {
       console.error("Error fetching drafts from API:", err);
     }
 
-    if (cached.length > 0) {
-      setDrafts(cached);
-    } else {
-      setDrafts([]);
-    }
+    // Fallback to cache if request fails
+    const cachedList = Array.from(cachedMap.values()).filter((d) => d.status === "drafting");
+    setDrafts(cachedList);
   };
 
   useEffect(() => {
@@ -80,6 +107,32 @@ export default function RepliesPage() {
     };
   }, [isLoaded]);
 
+  const saveDraftToBackend = async (draftId: string, currentBody: string) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
+      await fetch(`${apiUrl}/replies/drafts/${draftId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ current_body: currentBody }),
+      });
+    } catch (err) {
+      console.warn("Failed to save draft body to backend:", err);
+    }
+  };
+
+  const handleTextareaChange = (draftId: string, newBody: string) => {
+    isUserEditingRef.current.add(draftId);
+    setDrafts((prev) => {
+      const next = prev.map((item) => (item.id === draftId ? { ...item, body: newBody } : item));
+      try {
+        localStorage.setItem("active_drafts_cache", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    saveDraftToBackend(draftId, newBody);
+  };
+
   const handleEdit = async (draftId: string, instruction: string, currentBody: string) => {
     setEditingId(draftId);
     try {
@@ -92,9 +145,16 @@ export default function RepliesPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setDrafts((prev) =>
-          prev.map((d) => (d.id === draftId ? { ...d, body: data.body, version_history: data.version_history } : d))
-        );
+        isUserEditingRef.current.delete(draftId);
+        setDrafts((prev) => {
+          const next = prev.map((d) =>
+            d.id === draftId ? { ...d, body: data.body, version_history: data.version_history } : d
+          );
+          try {
+            localStorage.setItem("active_drafts_cache", JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
       }
     } catch (err) {
       console.error("Failed to edit draft:", err);
@@ -108,7 +168,7 @@ export default function RepliesPage() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const headers = await getHeaders();
-      
+
       // 1. Prepare Send (Create Approval request & sync latest manual body)
       const prepRes = await fetch(`${apiUrl}/replies/drafts/${draftId}/prepare-send`, {
         method: "POST",
@@ -132,7 +192,14 @@ export default function RepliesPage() {
       });
 
       if (sendRes.ok) {
-        setDrafts((prev) => prev.filter((d) => d.id !== draftId));
+        isUserEditingRef.current.delete(draftId);
+        setDrafts((prev) => {
+          const next = prev.filter((d) => d.id !== draftId);
+          try {
+            localStorage.setItem("active_drafts_cache", JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
         alert("✅ Email approved and sent successfully via Gmail API!");
       } else {
         const errText = await sendRes.text();
@@ -148,14 +215,17 @@ export default function RepliesPage() {
 
   const handleDiscard = async (draftId: string) => {
     try {
+      isUserEditingRef.current.delete(draftId);
+      setDrafts((prev) => {
+        const next = prev.filter((d) => d.id !== draftId);
+        try {
+          localStorage.setItem("active_drafts_cache", JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const headers = await getHeaders();
       await fetch(`${apiUrl}/replies/drafts/${draftId}`, { method: "DELETE", headers });
-      setDrafts((prev) => prev.filter((d) => d.id !== draftId));
-      try {
-        const cached = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
-        localStorage.setItem("active_drafts_cache", JSON.stringify(cached.filter((d: any) => d.id !== draftId)));
-      } catch (e) {}
     } catch (err) {
       console.error("Failed to discard draft:", err);
     }
@@ -241,10 +311,7 @@ export default function RepliesPage() {
                 </label>
                 <Textarea
                   value={d.body}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setDrafts((prev) => prev.map((item) => (item.id === d.id ? { ...item, body: val } : item)));
-                  }}
+                  onChange={(e) => handleTextareaChange(d.id, e.target.value)}
                   rows={8}
                   className="font-sans text-sm border-primary/40 focus:border-primary"
                 />

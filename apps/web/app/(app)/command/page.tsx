@@ -68,6 +68,11 @@ export default function CommandCenter() {
         body: JSON.stringify({ approval_id: prepData.approval_id }),
       });
       if (sendRes.ok) {
+        try {
+          const existing = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
+          const updated = existing.filter((d: any) => d.id !== draftId);
+          localStorage.setItem("active_drafts_cache", JSON.stringify(updated));
+        } catch (e) {}
         alert("✅ Draft approved and sent successfully via Gmail API!");
       } else {
         const errTxt = await sendRes.text();

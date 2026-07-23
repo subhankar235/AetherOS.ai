@@ -307,6 +307,8 @@ def _parse_query_params(query: str) -> tuple[str, datetime.timedelta | None, int
     typo_map = {
         "form": "from",
         "frm": "from",
+        "ive": "give",
+        "gimme": "give",
         "nakuri": "naukri",
         "nakri": "naukri",
         "gogle": "google",
@@ -339,7 +341,8 @@ def _parse_query_params(query: str) -> tuple[str, datetime.timedelta | None, int
         "show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "latest",
         "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-        "the", "my", "to", "about", "for", "with", "of", "in", "from", "unread", "hours", "hour", "hrs", "days", "day", "d", "h"
+        "the", "my", "to", "about", "for", "with", "of", "in", "from", "unread", "hours", "hour", "hrs", "days", "day", "d", "h",
+        "a", "an", "ive", "gimme", "pls", "please", "can", "you", "send", "fetch"
     }
 
     words = [w for w in lowered.replace("from:", " ").split() if w not in stop_words]
@@ -384,7 +387,8 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "latest",
                     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
                     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                    "the", "my", "to", "about", "for", "with", "of", "in", "from", "hours", "hour", "hrs", "days", "day"
+                    "the", "my", "to", "about", "for", "with", "of", "in", "from", "hours", "hour", "hrs", "days", "day",
+                    "a", "an", "ive", "gimme", "pls", "please", "can", "you", "send", "fetch"
                 }
                 clean_words = [w for w in lowered_q.replace("from:", " ").split() if w not in stop_words]
                 clean_term = " ".join(clean_words).strip()
@@ -424,6 +428,10 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     try:
                         search_res = await search_messages(uid, gmail_query, None, db)
                         msgs = search_res.get("messages", [])
+
+                        if not msgs and clean_term:
+                            search_res = await search_messages(uid, clean_term, None, db)
+                            msgs = search_res.get("messages", [])
                         
                         target_msgs = [m for m in msgs[:requested_limit] if m.get("id")]
                         if target_msgs:
