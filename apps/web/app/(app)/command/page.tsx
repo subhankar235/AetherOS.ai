@@ -547,35 +547,42 @@ export default function CommandCenter() {
               </Badge>
             </div>
 
-            <div className="space-y-1.5 text-xs">
-              {(activeProposal.source_email?.subject || activeProposal.target_email?.subject) && (
-                <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-emerald-700 dark:text-emerald-300 font-sans space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1 font-semibold text-[11px]">
-                      <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" /> Source Email Context:
-                    </div>
-                    <Link href="/inbox">
-                      <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-emerald-600 dark:text-emerald-400 hover:underline">
-                        Open Original Email ➔
-                      </Button>
-                    </Link>
+            {(activeProposal.source_email?.subject || activeProposal.target_email?.subject) && (
+              <div className="rounded-md bg-emerald-500/15 border border-emerald-500/30 p-3 text-emerald-800 dark:text-emerald-200 font-sans space-y-1.5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-[11px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                    <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                    <span>SOURCE EMAIL DETAILS</span>
                   </div>
-                  <div className="font-semibold text-[11px] truncate">
-                    "{activeProposal.source_email?.subject || activeProposal.target_email?.subject}"
-                  </div>
-                  {(activeProposal.source_email?.from?.email || activeProposal.target_email?.sender) && (
-                    <div className="text-[10px] opacity-80 truncate">
-                      Sender: {activeProposal.source_email?.from?.name || activeProposal.target_email?.sender}{" "}
-                      {activeProposal.source_email?.from?.email && activeProposal.source_email.from.email !== activeProposal.source_email.from.name ? `<${activeProposal.source_email.from.email}>` : ""}
-                    </div>
-                  )}
-                  {activeProposal.source_email?.summary && (
-                    <div className="text-[10px] opacity-75 italic line-clamp-2 pt-0.5">
-                      "{activeProposal.source_email.summary}"
-                    </div>
-                  )}
+                  <Link href="/inbox">
+                    <Button size="sm" variant="ghost" className="h-5 text-[10px] px-2 text-emerald-600 dark:text-emerald-300 hover:underline font-medium">
+                      Open Original Email ➔
+                    </Button>
+                  </Link>
                 </div>
-              )}
+                <div className="font-bold text-[12px]">
+                  Subject: "{activeProposal.source_email?.subject || activeProposal.target_email?.subject}"
+                </div>
+                {(activeProposal.source_email?.from?.email || activeProposal.target_email?.sender) && (
+                  <div className="text-[11px] opacity-90">
+                    <span className="font-semibold">From / Sender:</span> {activeProposal.source_email?.from?.name || activeProposal.target_email?.sender}{" "}
+                    {activeProposal.source_email?.from?.email && activeProposal.source_email.from.email !== activeProposal.source_email.from.name ? `<${activeProposal.source_email.from.email}>` : ""}
+                  </div>
+                )}
+                {activeProposal.attendees && activeProposal.attendees.length > 0 && (
+                  <div className="text-[11px] opacity-90 truncate">
+                    <span className="font-semibold">To / Receiver:</span> {activeProposal.attendees.join(", ")}
+                  </div>
+                )}
+                {activeProposal.source_email?.summary && (
+                  <div className="text-[10px] opacity-85 italic line-clamp-3 pt-1 border-t border-emerald-500/20">
+                    <span className="font-semibold not-italic">Email Brief:</span> "{activeProposal.source_email.summary}"
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-1.5 text-xs">
               <div>
                 <span className="font-semibold text-muted-foreground">Title:</span>{" "}
                 <span className="font-medium text-foreground">{activeProposal.title}</span>
