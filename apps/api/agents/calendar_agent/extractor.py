@@ -129,7 +129,13 @@ async def extract_meeting_details(
                     source_is_ambiguous=bool(parsed.get("source_is_ambiguous", False)),
                 )
 
-            if result and result.title:
+            if result:
+                if not result.title or result.title.lower() in ["meeting scheduling request", "meeting", "scheduled meeting", "calendar meeting"]:
+                    if email_context and "Subject:" in email_context:
+                        for line in email_context.splitlines():
+                            if line.startswith("Subject:"):
+                                result.title = line.replace("Subject:", "").strip()
+                                break
                 logger.info(
                     f"Extracted meeting via '{cand['name']}': title='{result.title}', date={result.date}, "
                     f"time={result.time}, duration={result.duration_minutes}, participants={result.participants}"
