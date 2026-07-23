@@ -22,6 +22,7 @@ async def prepare_send(
     draft_id: uuid.UUID,
     user_id: uuid.UUID,
     db: AsyncSession,
+    current_body_override: Optional[str] = None,
 ) -> dict[str, Any]:
     result = await db.execute(
         select(Draft).where(
@@ -35,6 +36,10 @@ async def prepare_send(
 
     if draft.status != "drafting":
         raise ValueError(f"Draft {draft_id} has status '{draft.status}', expected 'drafting'")
+
+    if current_body_override and current_body_override.strip() != draft.current_body.strip():
+        draft.current_body = current_body_override
+        await db.commit()
 
     email_result = await db.execute(
         select(EmailMetadata).where(EmailMetadata.id == draft.email_id)
