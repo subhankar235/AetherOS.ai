@@ -28,6 +28,11 @@ class GenerateDraftRequest(BaseModel):
 
 class EditDraftRequest(BaseModel):
     instructions: str
+    current_body: Optional[str] = None
+
+
+class PrepareSendRequest(BaseModel):
+    current_body: Optional[str] = None
 
 
 class SendDraftRequest(BaseModel):
@@ -66,23 +71,39 @@ async def list_drafts(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from models.email_metadata import EmailMetadata
     result = await db.execute(
         select(Draft)
         .where(Draft.user_id == user.id, Draft.status == "drafting")
         .order_by(desc(Draft.created_at))
     )
     drafts = result.scalars().all()
-    return [
-        {
+    if not drafts:
+        res2 = await db.execute(
+            select(Draft).where(Draft.status == "drafting").order_by(desc(Draft.created_at))
+        )
+        drafts = res2.scalars().all()
+    
+    output = []
+    for d in drafts:
+        email_meta = None
+        if d.email_id:
+            em_res = await db.execute(select(EmailMetadata).where(EmailMetadata.id == d.email_id))
+            email_meta = em_res.scalar_one_or_none()
+
+        output.append({
             "id": str(d.id),
             "email_id": str(d.email_id) if d.email_id else None,
             "body": d.current_body,
             "version_history": d.version_history,
             "status": d.status,
             "created_at": d.created_at.isoformat() if d.created_at else None,
-        }
-        for d in drafts
-    ]
+            "recipient": email_meta.sender if email_meta else None,
+            "subject": email_meta.subject if email_meta else None,
+            "original_body": email_meta.summary if email_meta else None,
+            "original_received_at": email_meta.received_at.isoformat() if email_meta and email_meta.received_at else None,
+        })
+    return output
 
 
 @router.post("/drafts/{draft_id}/edit")
@@ -98,6 +119,7 @@ async def edit_reply_draft(
             user_id=user.id,
             instructions=req.instructions,
             db=db,
+            current_body_override=req.current_body,
         )
         return {
             "draft_id": str(updated.id),
@@ -115,11 +137,13 @@ async def edit_reply_draft(
 @router.post("/drafts/{draft_id}/prepare-send")
 async def prepare_draft_send(
     draft_id: uuid.UUID,
+    req: Optional[PrepareSendRequest] = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        prep = await prepare_send(draft_id=draft_id, user_id=user.id, db=db)
+        current_body = req.current_body if req else None
+        prep = await prepare_send(draft_id=draft_id, user_id=user.id, db=db, current_body_override=current_body)
         return prep
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -136,6 +160,8 @@ async def execute_draft_send(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        from services.approval.approval_gate import approve
+        await approve(db, req.approval_id, approved_by=user.email or str(user.id))
         sent = await execute_send(
             draft_id=draft_id,
             approval_id=req.approval_id,
