@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 import logging
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from googleapiclient.discovery import build
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -12,8 +13,8 @@ from integrations.google_auth import get_google_credentials, GoogleScopes
 logger = logging.getLogger("integrations.calendar_client")
 
 calendar_retry = retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=1, max=3),
     reraise=True
 )
 
@@ -45,7 +46,8 @@ async def get_freebusy(
         "timeMax": time_max.isoformat(),
         "items": [{"id": cid} for cid in calendar_ids]
     }
-    return service.freebusy().query(body=body).execute()
+    req = service.freebusy().query(body=body)
+    return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=5.0)
 
 
 @calendar_retry
@@ -63,11 +65,12 @@ async def create_event(
     await limiter.check_rate_limit(f"calendar:{user_id}", limit=settings.RATE_LIMIT_CALENDAR_PER_MIN, period=60)
     service = await _get_calendar_service(user_id, db)
     
-    return service.events().insert(
+    req = service.events().insert(
         calendarId=calendar_id,
         body=event_body,
         conferenceDataVersion=conference_data_version
-    ).execute()
+    )
+    return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=6.0)
 
 
 @calendar_retry
@@ -85,12 +88,13 @@ async def update_event(
     await limiter.check_rate_limit(f"calendar:{user_id}", limit=settings.RATE_LIMIT_CALENDAR_PER_MIN, period=60)
     service = await _get_calendar_service(user_id, db)
     
-    return service.events().update(
+    req = service.events().update(
         calendarId=calendar_id,
         eventId=event_id,
         body=event_body,
         conferenceDataVersion=conference_data_version
-    ).execute()
+    )
+    return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=6.0)
 
 
 @calendar_retry
@@ -106,7 +110,8 @@ async def delete_event(
     await limiter.check_rate_limit(f"calendar:{user_id}", limit=settings.RATE_LIMIT_CALENDAR_PER_MIN, period=60)
     service = await _get_calendar_service(user_id, db)
     
-    service.events().delete(
+    req = service.events().delete(
         calendarId=calendar_id,
         eventId=event_id
-    ).execute()
+    )
+    await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=5.0)
