@@ -251,13 +251,61 @@ async def confirm_event(
 
     # Send email invitation to attendees with meeting details & Google Meet link
     invitation_sent = False
+    invitation_err_msg = None
     try:
+        from models.user import User
+        from models.email_metadata import EmailMetadata
+
+        user_obj = await db.scalar(select(User).where(User.id == user_id))
+        user_email = user_obj.email if user_obj and user_obj.email else None
+
         raw_attendees = event_body.get("attendees", [])
-        attendee_emails = [
-            att["email"] if isinstance(att, dict) and att.get("email") else str(att)
-            for att in raw_attendees
-            if att
-        ]
+        attendee_emails = []
+        for att in raw_attendees:
+            email_str = att["email"] if isinstance(att, dict) and att.get("email") else str(att)
+            if "@" in email_str and email_str not in attendee_emails:
+                attendee_emails.append(email_str)
+
+        if not source_email_id and preview_id:
+            try:
+                meeting_uuid = uuid.UUID(preview_id)
+                m_rec = await db.get(Meeting, meeting_uuid)
+                if m_rec and m_rec.source_email_id:
+                    source_email_id = m_rec.source_email_id
+            except Exception:
+                pass
+
+        if source_email_id:
+            try:
+                em = await db.get(EmailMetadata, source_email_id)
+                if em and em.sender:
+                    s_raw = em.sender
+                    s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
+                    if "@" in s_email and s_email not in attendee_emails:
+                        attendee_emails.append(s_email)
+            except Exception:
+                pass
+
+        if user_email and "@" in user_email and user_email not in attendee_emails:
+            attendee_emails.append(user_email)
+
+        # Fallback: if still no attendee email with '@', fetch recent EmailMetadata sender for user
+        if not attendee_emails:
+            try:
+                recent_em = await db.scalar(
+                    select(EmailMetadata)
+                    .where(EmailMetadata.user_id == user_id)
+                    .order_by(EmailMetadata.received_at.desc())
+                    .limit(1)
+                )
+                if recent_em and recent_em.sender:
+                    s_raw = recent_em.sender
+                    s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
+                    if "@" in s_email:
+                        attendee_emails.append(s_email)
+            except Exception:
+                pass
+
         if attendee_emails:
             subject_title = event_body.get("summary", "Calendar Meeting")
             start_str = event_body.get("start", {}).get("dateTime", "")
@@ -269,14 +317,17 @@ async def confirm_event(
                 f"🎥 Google Meet Video Conference: {meet_link}\n\n"
                 f"Best regards,\nAether Calendar Agent"
             )
+            invitation_err_msg = None
             for att_email in attendee_emails:
-                if "@" in att_email:
-                    try:
-                        await send_message(user_id, att_email, f"Invitation: {subject_title}", invitation_body, None, db)
-                        invitation_sent = True
-                        logger.info(f"Sent meeting invitation email to {att_email}")
-                    except Exception as send_err:
-                        logger.warning(f"Could not send email invitation to {att_email}: {send_err}")
+                try:
+                    await send_message(user_id, att_email, f"Invitation: {subject_title}", invitation_body, None, db)
+                    invitation_sent = True
+                    logger.info(f"Successfully sent meeting invitation email to {att_email}")
+                except Exception as send_err:
+                    invitation_err_msg = str(send_err)
+                    logger.warning(f"Could not send email invitation to {att_email}: {send_err}")
+        else:
+            logger.warning(f"No valid attendee email addresses found to send invitation for meeting '{event_body.get('summary')}'")
     except Exception as inv_err:
         logger.warning(f"Failed to process email invitation dispatch: {inv_err}")
 
@@ -299,6 +350,7 @@ async def confirm_event(
         "hangout_link": meet_link,
         "meet_link": meet_link,
         "invitation_sent": invitation_sent,
+        "invitation_error": invitation_err_msg if not invitation_sent else None,
         "status": "confirmed",
     }
 

@@ -746,23 +746,17 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                     pass
 
             if not target_email and params.get("last_search_results") and isinstance(params["last_search_results"], list):
-                first_res = params["last_search_results"][0]
-                if isinstance(first_res, dict) and first_res.get("id"):
-                    try:
-                        target_email = await db.scalar(
-                            select(EmailMetadata).where(EmailMetadata.id == uuid.UUID(str(first_res["id"])))
-                        )
-                    except Exception:
-                        pass
-
-            if not target_email:
-                res_email = await db.execute(
-                    select(EmailMetadata)
-                    .where(EmailMetadata.user_id == uid)
-                    .order_by(desc(EmailMetadata.received_at))
-                    .limit(1)
-                )
-                target_email = res_email.scalar_one_or_none()
+                # Check if raw_input specifies an ordinal reference or if user just searched emails
+                lowered_inp = raw_input.lower()
+                if any(w in lowered_inp for w in ["email", "mail", "message", "first", "1st", "second", "2nd", "this", "that"]):
+                    first_res = params["last_search_results"][0]
+                    if isinstance(first_res, dict) and first_res.get("id"):
+                        try:
+                            target_email = await db.scalar(
+                                select(EmailMetadata).where(EmailMetadata.id == uuid.UUID(str(first_res["id"])))
+                            )
+                        except Exception:
+                            pass
 
             email_ctx = None
             if target_email:

@@ -45,6 +45,12 @@ interface ActiveCalendarProposalInfo {
     sender?: string;
     id?: string;
   };
+  source_email?: {
+    subject?: string;
+    from?: { name?: string; email?: string };
+    summary?: string;
+    message_id?: string;
+  };
   double_booking_warnings?: any[];
 }
 
@@ -151,7 +157,18 @@ export default function CommandCenter() {
 
       if (res.ok) {
         const data = await res.json();
-        alert(`✅ Calendar event confirmed & created! ${data.hangout_link ? `\nMeet Link: ${data.hangout_link}` : ''}`);
+        let msg = `✅ Calendar event confirmed & created!`;
+        if (data.meet_link || data.hangout_link) {
+          msg += `\n🎥 Meet Link: ${data.meet_link || data.hangout_link}`;
+        }
+        if (data.invitation_sent) {
+          msg += `\n📧 Invitation email sent successfully!`;
+        } else if (data.invitation_error) {
+          msg += `\n⚠️ Invitation notice: ${data.invitation_error}`;
+        } else {
+          msg += `\n⚠️ Invitation notice: Google Account missing email send scope. Reconnect Google in Settings -> Integrations to enable automatic email dispatch.`;
+        }
+        alert(msg);
         setActiveProposal(null);
       } else {
         const errTxt = await res.text();
@@ -318,6 +335,7 @@ export default function CommandCenter() {
             attendees: respObj.result?.participants || [],
             meet_link: meetLink,
             target_email: respObj.result?.target_email,
+            source_email: respObj.result?.source_email,
             double_booking_warnings: doubleBookWarnings,
           });
 
@@ -530,14 +548,31 @@ export default function CommandCenter() {
             </div>
 
             <div className="space-y-1.5 text-xs">
-              {activeProposal.target_email?.subject && (
-                <div className="rounded bg-emerald-500/10 border border-emerald-500/20 p-2 text-emerald-700 dark:text-emerald-300 font-sans space-y-0.5">
-                  <div className="flex items-center gap-1 font-semibold text-[11px]">
-                    <Mail className="h-3.5 w-3.5 shrink-0" /> Target Email Context:
+              {(activeProposal.source_email?.subject || activeProposal.target_email?.subject) && (
+                <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-emerald-700 dark:text-emerald-300 font-sans space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1 font-semibold text-[11px]">
+                      <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" /> Source Email Context:
+                    </div>
+                    <Link href="/inbox">
+                      <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-emerald-600 dark:text-emerald-400 hover:underline">
+                        Open Original Email ➔
+                      </Button>
+                    </Link>
                   </div>
-                  <div className="font-medium text-[11px] truncate">"{activeProposal.target_email.subject}"</div>
-                  {activeProposal.target_email.sender && (
-                    <div className="text-[10px] opacity-80 truncate">From: {activeProposal.target_email.sender}</div>
+                  <div className="font-semibold text-[11px] truncate">
+                    "{activeProposal.source_email?.subject || activeProposal.target_email?.subject}"
+                  </div>
+                  {(activeProposal.source_email?.from?.email || activeProposal.target_email?.sender) && (
+                    <div className="text-[10px] opacity-80 truncate">
+                      Sender: {activeProposal.source_email?.from?.name || activeProposal.target_email?.sender}{" "}
+                      {activeProposal.source_email?.from?.email && activeProposal.source_email.from.email !== activeProposal.source_email.from.name ? `<${activeProposal.source_email.from.email}>` : ""}
+                    </div>
+                  )}
+                  {activeProposal.source_email?.summary && (
+                    <div className="text-[10px] opacity-75 italic line-clamp-2 pt-0.5">
+                      "{activeProposal.source_email.summary}"
+                    </div>
                   )}
                 </div>
               )}

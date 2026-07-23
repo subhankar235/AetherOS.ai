@@ -158,12 +158,13 @@ async def confirm_calendar_event(
             except Exception as app_exc:
                 logger.info(f"Auto-approval step log: {app_exc}")
 
+        meeting_uuid = uuid.UUID(req.preview_id)
+        stmt = select(Meeting).where(Meeting.id == meeting_uuid, Meeting.user_id == user.id)
+        res = await db.execute(stmt)
+        m = res.scalar_one_or_none()
+
         event_body = req.event_body
         if not event_body:
-            meeting_uuid = uuid.UUID(req.preview_id)
-            stmt = select(Meeting).where(Meeting.id == meeting_uuid, Meeting.user_id == user.id)
-            res = await db.execute(stmt)
-            m = res.scalar_one_or_none()
             if not m or not m.proposed_slots:
                 raise HTTPException(status_code=404, detail="Preview meeting record not found")
             slot = m.proposed_slots[0]
@@ -179,6 +180,7 @@ async def confirm_calendar_event(
             preview_id=req.preview_id,
             approval_id=uuid.UUID(str(req.approval_id)) if req.approval_id else uuid.UUID(str(req.preview_id)),
             event_body=event_body,
+            source_email_id=m.source_email_id if m else None,
         )
         return result
     except ApprovalRequiredError as e:

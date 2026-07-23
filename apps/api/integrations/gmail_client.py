@@ -85,7 +85,8 @@ async def send_message(
         payload["threadId"] = thread_id
 
     try:
-        return service.users().messages().send(userId="me", body=payload).execute()
+        req = service.users().messages().send(userId="me", body=payload)
+        return await asyncio.to_thread(req.execute)
     except HttpError as exc:
         if exc.resp.status in (401, 403) and ("insufficient" in str(exc).lower() or "scope" in str(exc).lower()):
             logger.warning(f"Google API send failed due to insufficient permissions for user {user_id}: {exc}")
