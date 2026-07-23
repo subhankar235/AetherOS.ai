@@ -479,6 +479,33 @@ export default function CalendarPage() {
 
             return (
               <Card key={m.id} className="p-5 border hover:border-primary/40 transition-all space-y-3">
+                {(m.target_email?.subject || (m as any).source_email?.subject) && (
+                  <div className="rounded-md bg-emerald-500/15 border border-emerald-500/30 p-3 text-xs text-emerald-800 dark:text-emerald-200 font-sans space-y-1.5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 font-bold text-[11px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                        <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                        <span>SOURCE EMAIL DETAILS</span>
+                      </div>
+                      <Link href="/inbox">
+                        <Button size="sm" variant="ghost" className="h-5 text-[10px] px-2 text-emerald-600 dark:text-emerald-300 hover:underline font-medium">
+                          Open Original Email ➔
+                        </Button>
+                      </Link>
+                    </div>
+                    <div className="font-bold text-[12px]">
+                      Subject: "{m.target_email?.subject || (m as any).source_email?.subject}"
+                    </div>
+                    <div className="text-[11px] opacity-90">
+                      <span className="font-semibold">From / Sender:</span> {m.target_email?.sender || (m as any).source_email?.from?.name || (m as any).source_email?.from?.email}
+                    </div>
+                    {(m as any).source_email?.summary && (
+                      <div className="text-[10px] opacity-85 italic line-clamp-3 pt-1 border-t border-emerald-500/20">
+                        <span className="font-semibold not-italic">Email Brief:</span> "{ (m as any).source_email.summary }"
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -494,33 +521,6 @@ export default function CalendarPage() {
                         </Badge>
                       )}
                     </div>
-
-                    {(m.target_email?.subject || (m as any).source_email?.subject) && (
-                      <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs text-emerald-700 dark:text-emerald-300 font-sans space-y-1 mt-1.5">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5 font-semibold text-[11px]">
-                            <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                            <span>Source Email Context</span>
-                          </div>
-                          <Link href="/inbox">
-                            <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-emerald-600 dark:text-emerald-400 hover:underline">
-                              Open Original Email ➔
-                            </Button>
-                          </Link>
-                        </div>
-                        <div className="font-semibold text-[11px]">
-                          "{m.target_email?.subject || (m as any).source_email?.subject}"
-                        </div>
-                        <div className="text-[10px] opacity-80">
-                          Sender: {m.target_email?.sender || (m as any).source_email?.from?.email || (m as any).source_email?.from?.name}
-                        </div>
-                        {(m as any).source_email?.summary && (
-                          <div className="text-[10px] opacity-75 italic line-clamp-2 pt-0.5">
-                            "{ (m as any).source_email.summary }"
-                          </div>
-                        )}
-                      </div>
-                    )}
 
                     {slot && (
                       <div className="flex flex-wrap gap-4 text-xs text-muted-foreground pt-1">
