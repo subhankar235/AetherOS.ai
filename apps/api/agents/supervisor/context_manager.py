@@ -50,6 +50,7 @@ async def resolve_reference(
 ) -> tuple[str, Optional[dict[str, Any]]]:
     lowered = text.lower().strip()
 
+    # 1. Exact pattern lookup
     exact = REFERENCE_PATTERNS.get(lowered)
     if exact is not None:
         if exact.startswith("last_search_results_index_"):
@@ -62,19 +63,23 @@ async def resolve_reference(
         resolved_value = context.get(exact)
         if resolved_value is not None:
             return "resolved", {"resolved_reference": exact, "resolved_value": resolved_value}
-        return "missing_context", None
 
-    if "reply to it" in lowered or "reply to that" in lowered:
-        email_id = context.get("active_email_id")
-        if email_id:
-            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": email_id}
-        return "missing_context", None
+    # 2. Heuristic check for email references (e.g. "this", "it", "that", "for this", "draft for", "reply to")
+    email_pronoun_keywords = ["this", "it", "that", "for this", "the email", "for it", "make draft", "draft", "reply"]
+    if any(kw in lowered for kw in email_pronoun_keywords):
+        active_email = context.get("active_email_id")
+        if active_email:
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": active_email}
 
-    if "schedule" in lowered and ("it" in lowered or "this" in lowered or "that" in lowered):
-        email_id = context.get("active_email_id")
-        if email_id:
-            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": email_id}
-        return "missing_context", None
+        last_results = context.get("last_search_results", [])
+        if last_results:
+            first_res = last_results[0]
+            first_id = first_res.get("id") if isinstance(first_res, dict) else first_res
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": first_id}
+
+        # If user explicitly asked for draft/reply/this, signal context search
+        if any(term in lowered for term in ["draft", "reply", "this", "it"]):
+            return "missing_context", None
 
     return "unresolved", None
 
