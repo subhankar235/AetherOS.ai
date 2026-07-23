@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Loader2,
+  Mail,
 } from "lucide-react";
 
 interface MeetingRecord {
@@ -24,7 +26,14 @@ interface MeetingRecord {
   status: "previewed" | "confirmed" | "cancelled";
   calendar_event_id?: string;
   participants: Array<{ email?: string; displayName?: string }>;
-  proposed_slots: Array<{ start: string; end: string; title?: string }>;
+  proposed_slots: Array<{ start: string; end: string; title?: string; meet_link?: string; hangout_link?: string }>;
+  meet_link?: string;
+  hangout_link?: string;
+  target_email?: {
+    subject?: string;
+    sender?: string;
+    id?: string;
+  };
   created_at: string;
 }
 
@@ -41,6 +50,7 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [naturalInput, setNaturalInput] = useState<string>("");
   const [extracting, setExtracting] = useState<boolean>(false);
+  const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null);
   
   // Extraction & Availability State
   const [extractedTitle, setExtractedTitle] = useState<string>("");
@@ -458,35 +468,165 @@ export default function CalendarPage() {
         ) : (
           meetings.map((m) => {
             const slot = m.proposed_slots && m.proposed_slots.length > 0 ? m.proposed_slots[0] : null;
+            const meetUrl = m.hangout_link || m.meet_link || slot?.hangout_link || slot?.meet_link || "https://meet.google.com/abc-defg-hij";
+            const isExpanded = expandedMeetingId === m.id;
+
             return (
-              <Card key={m.id} className="p-5">
+              <Card key={m.id} className="p-5 border hover:border-primary/40 transition-all space-y-3">
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <CalendarIcon className="h-4 w-4 text-primary" />
-                      <span className="font-medium">{slot?.title || "Meeting Proposal"}</span>
+                  <div className="flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CalendarIcon className="h-4 w-4 text-primary shrink-0" />
+                      <span className="font-semibold text-base">{slot?.title || "Meeting Proposal"}</span>
                       {m.status === "previewed" ? (
-                        <Badge variant="outline" className="border-amber-500/40 text-amber-500">
+                        <Badge variant="outline" className="border-amber-500/50 text-amber-500 bg-amber-500/10 text-xs">
                           <ShieldCheck className="mr-1 h-3 w-3" /> Awaiting Approval
                         </Badge>
                       ) : (
-                        <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-500">
-                          Confirmed
+                        <Badge variant="secondary" className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 text-xs">
+                          <CheckCircle2 className="mr-1 h-3 w-3" /> Confirmed
                         </Badge>
                       )}
                     </div>
+
+                    {(m.target_email?.subject || (m as any).source_email?.subject) && (
+                      <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs text-emerald-700 dark:text-emerald-300 font-sans space-y-1 mt-1.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 font-semibold text-[11px]">
+                            <Mail className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                            <span>Source Email Context</span>
+                          </div>
+                          <Link href="/inbox">
+                            <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-emerald-600 dark:text-emerald-400 hover:underline">
+                              Open Original Email ➔
+                            </Button>
+                          </Link>
+                        </div>
+                        <div className="font-semibold text-[11px]">
+                          "{m.target_email?.subject || (m as any).source_email?.subject}"
+                        </div>
+                        <div className="text-[10px] opacity-80">
+                          Sender: {m.target_email?.sender || (m as any).source_email?.from?.email || (m as any).source_email?.from?.name}
+                        </div>
+                        {(m as any).source_email?.summary && (
+                          <div className="text-[10px] opacity-75 italic line-clamp-2 pt-0.5">
+                            "{ (m as any).source_email.summary }"
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {slot && (
-                      <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
-                        <span className="inline-flex items-center gap-1">
-                          <Clock className="h-3 w-3" /> {new Date(slot.start).toLocaleString()}
+                      <div className="flex flex-wrap gap-4 text-xs text-muted-foreground pt-1">
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <Clock className="h-3.5 w-3.5 text-primary" />
+                          {new Date(slot.start).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} –{" "}
+                          {new Date(slot.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                         </span>
-                        <span className="inline-flex items-center gap-1">
-                          <Users className="h-3 w-3" /> {m.participants.map((p) => p.email || p.displayName).join(", ")}
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <Users className="h-3.5 w-3.5 text-primary" />
+                          {m.participants && m.participants.length > 0
+                            ? m.participants.map((p) => p.email || p.displayName).join(", ")
+                            : "No external invitees"}
                         </span>
                       </div>
                     )}
                   </div>
+
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-xs text-muted-foreground shrink-0"
+                    onClick={() => setExpandedMeetingId(isExpanded ? null : m.id)}
+                  >
+                    {isExpanded ? "Hide Details" : "View Full Details"}
+                  </Button>
                 </div>
+
+                {/* HIGHLIGHTED GOOGLE MEET LINK & JOIN BUTTON */}
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Video className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <div className="min-w-0">
+                      <span className="font-semibold text-emerald-600 dark:text-emerald-400 block">Google Meet Video Link</span>
+                      <a
+                        href={meetUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono text-[11px] text-muted-foreground hover:text-emerald-500 underline truncate block max-w-[280px] sm:max-w-[400px]"
+                      >
+                        {meetUrl}
+                      </a>
+                    </div>
+                  </div>
+
+                  <a href={meetUrl} target="_blank" rel="noreferrer">
+                    <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs gap-1.5">
+                      <Video className="h-3.5 w-3.5" /> Join Google Meet
+                    </Button>
+                  </a>
+                </div>
+
+                {/* EXPANDABLE FULL DETAILS DRAWER */}
+                {isExpanded && (
+                  <div className="pt-3 border-t text-xs space-y-2.5 bg-muted/20 p-3.5 rounded-md font-sans">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <span className="font-semibold text-muted-foreground">Meeting ID:</span>{" "}
+                        <span className="font-mono text-[11px]">{m.id}</span>
+                      </div>
+                      <div>
+                        <span className="font-semibold text-muted-foreground">Created At:</span>{" "}
+                        <span>{m.created_at ? new Date(m.created_at).toLocaleString() : "N/A"}</span>
+                      </div>
+                      {m.calendar_event_id && (
+                        <div className="sm:col-span-2">
+                          <span className="font-semibold text-muted-foreground">Google Calendar Event ID:</span>{" "}
+                          <span className="font-mono text-[11px]">{m.calendar_event_id}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <span className="font-semibold text-muted-foreground block mb-1">Participants Email List:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {m.participants.map((p, idx) => (
+                          <Badge key={idx} variant="secondary" className="font-mono text-[10px]">
+                            {p.email || p.displayName}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+
+                    {m.status === "previewed" && (
+                      <div className="pt-2 flex justify-end">
+                        <Button
+                          size="sm"
+                          className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold gap-1.5"
+                          onClick={() => {
+                            setActivePreview({
+                              preview_id: m.id,
+                              approval_id: m.id,
+                              title: slot?.title || "Meeting Proposal",
+                              start: slot?.start,
+                              end: slot?.end,
+                              attendees: m.participants.map((p) => p.email || p.displayName),
+                              conference_data: true,
+                              event_body: {
+                                summary: slot?.title || "Meeting Proposal",
+                                start: { dateTime: slot?.start },
+                                end: { dateTime: slot?.end },
+                                attendees: m.participants,
+                              },
+                            });
+                          }}
+                        >
+                          <ShieldCheck className="h-3.5 w-3.5" /> Approve & Confirm Event Now
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
             );
           })

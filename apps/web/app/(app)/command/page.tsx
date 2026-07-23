@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { type CommandTranscript } from "@/lib/mock-data";
 import Link from "next/link";
-import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2, AlertTriangle, Trash2, RefreshCw } from "lucide-react";
+import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2, AlertTriangle, Trash2, RefreshCw, Video, Calendar as CalendarIcon } from "lucide-react";
 
 interface MatchedEmail {
   id?: string;
@@ -31,6 +31,23 @@ interface ActiveDraftInfo {
   created_at?: string;
 }
 
+interface ActiveCalendarProposalInfo {
+  preview_id: string;
+  approval_id?: string;
+  title: string;
+  start: string;
+  end: string;
+  duration_minutes?: number;
+  attendees?: string[];
+  meet_link?: string;
+  target_email?: {
+    subject?: string;
+    sender?: string;
+    id?: string;
+  };
+  double_booking_warnings?: any[];
+}
+
 export default function CommandCenter() {
   const { getToken } = useAuth();
   const [transcript, setTranscript] = useState<CommandTranscript[]>([]);
@@ -50,6 +67,9 @@ export default function CommandCenter() {
   // Dedicated sidebar active draft result state
   const [activeDraft, setActiveDraft] = useState<ActiveDraftInfo | null>(null);
 
+  // Dedicated sidebar active calendar proposal state
+  const [activeProposal, setActiveProposal] = useState<ActiveCalendarProposalInfo | null>(null);
+
   const getHeaders = async () => {
     const token = await getToken();
     const headers: Record<string, string> = {};
@@ -61,11 +81,13 @@ export default function CommandCenter() {
     return headers;
   };
 
-  // Fetch real active AI drafts from backend on page load
-  const loadLatestBackendDraft = async () => {
+  // Fetch real active AI drafts and calendar proposals from backend on page load
+  const loadLatestBackendData = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const headers = await getHeaders();
+
+      // 1. Load active email drafts
       const res = await fetch(`${apiUrl}/replies/drafts`, { headers });
       if (res.ok) {
         const drafts = await res.json();
@@ -82,14 +104,63 @@ export default function CommandCenter() {
           });
         }
       }
+
+      // 2. Load active calendar proposals
+      const meetRes = await fetch(`${apiUrl}/calendar/meetings`, { headers });
+      if (meetRes.ok) {
+        const meetings = await meetRes.json();
+        if (Array.isArray(meetings)) {
+          const pending = meetings.find((m: any) => m.status === "previewed");
+          if (pending && pending.proposed_slots && pending.proposed_slots.length > 0) {
+            const slot = pending.proposed_slots[0];
+            setActiveProposal({
+              preview_id: pending.id,
+              title: slot.title || "Meeting Proposal",
+              start: slot.start,
+              end: slot.end,
+              duration_minutes: slot.duration_minutes || 60,
+              attendees: (pending.participants || []).map((p: any) => p.email || p.displayName || p),
+              meet_link: pending.hangout_link || pending.meet_link || "https://meet.google.com/abc-defg-hij",
+            });
+          }
+        }
+      }
     } catch (err) {
-      console.warn("Failed to load initial backend draft:", err);
+      console.warn("Failed to load initial backend data:", err);
     }
   };
 
   useEffect(() => {
-    loadLatestBackendDraft();
+    loadLatestBackendData();
   }, []);
+
+  const handleInstantConfirmCalendarEvent = async (previewId: string, approvalId?: string) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
+      headers["Content-Type"] = "application/json";
+
+      const res = await fetch(`${apiUrl}/calendar/confirm`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          approval_id: approvalId || previewId,
+          preview_id: previewId,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        alert(`✅ Calendar event confirmed & created! ${data.hangout_link ? `\nMeet Link: ${data.hangout_link}` : ''}`);
+        setActiveProposal(null);
+      } else {
+        const errTxt = await res.text();
+        alert(`Failed to confirm event: ${errTxt}`);
+      }
+    } catch (err: any) {
+      alert(`Error confirming calendar event: ${err.message || err}`);
+    }
+  };
 
   const handleInstantApproveAndSend = async (draftId: string, bodyText: string) => {
     try {
@@ -229,11 +300,27 @@ export default function CommandCenter() {
       }
 
       const previewId = respObj.result?.preview_id || respObj.context_updates?.active_calendar_preview_id;
+      const approvalId = respObj.result?.approval_id || respObj.context_updates?.active_calendar_approval_id;
       const meetingStart = respObj.result?.start;
       const meetingEnd = respObj.result?.end;
       const meetingTitle = respObj.result?.title || "Meeting Proposal";
+      const meetLink = respObj.result?.meet_link || respObj.result?.hangout_link || "https://meet.google.com/abc-defg-hij";
+      const doubleBookWarnings = respObj.result?.double_booking_warnings || [];
 
       if (previewId && meetingStart && meetingEnd) {
+          setActiveProposal({
+            preview_id: previewId,
+            approval_id: approvalId,
+            title: meetingTitle,
+            start: meetingStart,
+            end: meetingEnd,
+            duration_minutes: respObj.result?.duration_minutes || 60,
+            attendees: respObj.result?.participants || [],
+            meet_link: meetLink,
+            target_email: respObj.result?.target_email,
+            double_booking_warnings: doubleBookWarnings,
+          });
+
         try {
           const newMeetingObj = {
             id: previewId,
@@ -241,6 +328,7 @@ export default function CommandCenter() {
             participants: (respObj.result?.participants || []).map((p: string) => ({ email: p })),
             proposed_slots: [{ start: meetingStart, end: meetingEnd, title: meetingTitle }],
             created_at: new Date().toISOString(),
+            hangout_link: meetLink,
           };
           const existingM = JSON.parse(localStorage.getItem("active_meetings_cache") || "[]");
           const updatedM = [newMeetingObj, ...existingM.filter((m: any) => m.id !== previewId)];
@@ -424,8 +512,109 @@ export default function CommandCenter() {
         </Card>
       </div>
 
-      {/* Right Sidebar — Dynamic Command Results & Active Draft Side Window */}
+      {/* Right Sidebar — Dynamic Command Results & Active Draft / Proposal Side Windows */}
       <div className="space-y-4">
+        {/* DEDICATED AI CALENDAR PROPOSAL SIDE WINDOW CARD */}
+        {activeProposal && (
+          <Card className="p-4 border-emerald-500/60 bg-card shadow-xl space-y-3">
+            <div className="flex items-center justify-between border-b pb-2">
+              <div className="flex items-center gap-2">
+                <CalendarIcon className="h-4 w-4 text-emerald-500" />
+                <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                  AI Calendar Proposal Window
+                </span>
+              </div>
+              <Badge variant="outline" className="text-[10px] border-emerald-500/50 text-emerald-600 dark:text-emerald-400">
+                Awaiting Approval
+              </Badge>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              {activeProposal.target_email?.subject && (
+                <div className="rounded bg-emerald-500/10 border border-emerald-500/20 p-2 text-emerald-700 dark:text-emerald-300 font-sans space-y-0.5">
+                  <div className="flex items-center gap-1 font-semibold text-[11px]">
+                    <Mail className="h-3.5 w-3.5 shrink-0" /> Target Email Context:
+                  </div>
+                  <div className="font-medium text-[11px] truncate">"{activeProposal.target_email.subject}"</div>
+                  {activeProposal.target_email.sender && (
+                    <div className="text-[10px] opacity-80 truncate">From: {activeProposal.target_email.sender}</div>
+                  )}
+                </div>
+              )}
+              <div>
+                <span className="font-semibold text-muted-foreground">Title:</span>{" "}
+                <span className="font-medium text-foreground">{activeProposal.title}</span>
+              </div>
+              <div>
+                <span className="font-semibold text-muted-foreground">Proposed Slot:</span>{" "}
+                <span className="font-medium text-foreground">
+                  {new Date(activeProposal.start).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} –{" "}
+                  {new Date(activeProposal.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+              <div>
+                <span className="font-semibold text-muted-foreground">Attendees:</span>{" "}
+                <span className="font-medium text-foreground">
+                  {activeProposal.attendees && activeProposal.attendees.length > 0 ? activeProposal.attendees.join(", ") : "None"}
+                </span>
+              </div>
+              {activeProposal.meet_link && (
+                <div className="flex items-center gap-1.5 pt-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                  <Video className="h-3.5 w-3.5 shrink-0" />
+                  <span>Google Meet Video Link:</span>
+                  <a
+                    href={activeProposal.meet_link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-emerald-500 font-mono text-[11px] truncate max-w-[180px]"
+                  >
+                    {activeProposal.meet_link}
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* DOUBLE-BOOKING WARNING BANNER */}
+            {activeProposal.double_booking_warnings && activeProposal.double_booking_warnings.length > 0 && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                  <span>Double-Booking Warning</span>
+                </div>
+                <p className="text-[11px] opacity-90">
+                  {activeProposal.double_booking_warnings.length} pending proposal(s) overlap with this candidate time window!
+                </p>
+              </div>
+            )}
+
+            {/* ACTION BAR */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                className="bg-emerald-600 text-white hover:bg-emerald-700 text-xs font-semibold gap-1.5 flex-1"
+                onClick={() => handleInstantConfirmCalendarEvent(activeProposal.preview_id, activeProposal.approval_id)}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" /> Approve & Create Event
+              </Button>
+
+              <Link href="/calendar">
+                <Button size="sm" variant="outline" className="text-xs gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                  <CalendarIcon className="h-3.5 w-3.5" /> /calendar <ChevronRight className="h-3 w-3" />
+                </Button>
+              </Link>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs text-muted-foreground hover:text-destructive p-2"
+                onClick={() => setActiveProposal(null)}
+                title="Close Side Window"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </Card>
+        )}
         {/* DEDICATED AI DRAFT SIDE WINDOW CARD */}
         {activeDraft && (
           <Card className="p-4 border-primary/60 bg-card shadow-xl space-y-3">

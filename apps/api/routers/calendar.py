@@ -147,6 +147,17 @@ async def confirm_calendar_event(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        if req.approval_id:
+            try:
+                app_uuid = uuid.UUID(str(req.approval_id))
+                res_app = await db.execute(select(AgentLog).where(AgentLog.id == app_uuid))
+                app_rec = res_app.scalar_one_or_none()
+                if app_rec and app_rec.status == "pending_approval":
+                    from services.approval.approval_gate import approve
+                    await approve(db=db, approval_id=app_uuid, approved_by=user.email or "user")
+            except Exception as app_exc:
+                logger.info(f"Auto-approval step log: {app_exc}")
+
         event_body = req.event_body
         if not event_body:
             meeting_uuid = uuid.UUID(req.preview_id)
@@ -166,7 +177,7 @@ async def confirm_calendar_event(
             db=db,
             user_id=user.id,
             preview_id=req.preview_id,
-            approval_id=req.approval_id,
+            approval_id=uuid.UUID(str(req.approval_id)) if req.approval_id else uuid.UUID(str(req.preview_id)),
             event_body=event_body,
         )
         return result
@@ -189,23 +200,83 @@ async def list_meetings(
         stmt = select(Meeting).where(Meeting.user_id == user.id).order_by(desc(Meeting.created_at))
         res = await db.execute(stmt)
         meetings = res.scalars().all()
-        if not meetings:
-            logger.info(f"No meetings found for user {user.id}, falling back to global query")
-            res_all = await db.execute(select(Meeting).order_by(desc(Meeting.created_at)))
-            meetings = res_all.scalars().all()
-            if meetings:
-                logger.info(f"Fallback found {len(meetings)} meeting(s) (user_id mismatch may exist)")
 
-        logger.info(f"Total meetings returned: {len(meetings)}")
+        logger.info(f"Total meetings returned for user {user.id}: {len(meetings)}")
         output = []
+        from models.email_metadata import EmailMetadata
         for m in meetings:
+            slots = m.proposed_slots or []
+            first_slot = slots[0] if len(slots) > 0 else {}
+            from integrations.meet_client import generate_unique_meet_link
+            m_link = first_slot.get("meet_link") or first_slot.get("hangout_link") or generate_unique_meet_link()
+
+            source_email_obj = {
+                "thread_id": "",
+                "message_id": "",
+                "subject": "",
+                "from": {"name": "", "email": ""},
+                "received_at": "",
+                "summary": ""
+            }
+
+            if m.source_email_id:
+                em = await db.get(EmailMetadata, m.source_email_id)
+                if em:
+                    s_raw = em.sender or ""
+                    s_name = s_raw
+                    s_email = s_raw
+                    if "<" in s_raw and ">" in s_raw:
+                        sp = s_raw.split("<")
+                        s_name = sp[0].strip()
+                        s_email = sp[1].replace(">", "").strip()
+
+                    source_email_obj = {
+                        "thread_id": getattr(em, "thread_id", None) or "",
+                        "message_id": em.gmail_message_id or str(em.id),
+                        "subject": em.subject or "",
+                        "from": {"name": s_name, "email": s_email},
+                        "received_at": em.received_at.isoformat() if em.received_at else "",
+                        "summary": em.summary or ""
+                    }
+
+            formatted_attendees = []
+            for p in (m.participants or []):
+                p_str = p.get("email") or p.get("displayName") if isinstance(p, dict) else str(p)
+                p_name = p_str
+                p_email = p_str
+                if "<" in p_str and ">" in p_str:
+                    sp = p_str.split("<")
+                    p_name = sp[0].strip()
+                    p_email = sp[1].replace(">", "").strip()
+                formatted_attendees.append({"name": p_name, "email": p_email})
+
+            meeting_obj = {
+                "id": str(m.id),
+                "title": first_slot.get("title") or "Meeting Proposal",
+                "start_time": first_slot.get("start") or "",
+                "end_time": first_slot.get("end") or "",
+                "timezone": "UTC",
+                "location": "Google Meet",
+                "meet_link": m_link,
+                "attendees": formatted_attendees,
+            }
+
             output.append({
                 "id": str(m.id),
                 "user_id": str(m.user_id),
                 "status": m.status,
                 "calendar_event_id": m.calendar_event_id,
+                "meeting": meeting_obj,
+                "source_email": source_email_obj,
                 "participants": m.participants or [],
-                "proposed_slots": m.proposed_slots or [],
+                "proposed_slots": slots,
+                "meet_link": m_link,
+                "hangout_link": m_link,
+                "target_email": {
+                    "subject": source_email_obj["subject"],
+                    "sender": source_email_obj["from"]["email"] or source_email_obj["from"]["name"],
+                    "id": source_email_obj["message_id"],
+                } if source_email_obj["subject"] else None,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             })
         return output
