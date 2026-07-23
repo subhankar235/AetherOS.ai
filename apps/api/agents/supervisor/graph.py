@@ -260,13 +260,30 @@ async def run_support_agent(action: str, params: dict[str, Any]) -> dict[str, An
     }
 
 
-def _build_gmail_query(query: str) -> tuple[str, datetime.timedelta | None]:
+def _parse_query_params(query: str) -> tuple[str, datetime.timedelta | None, int]:
     import re
     import datetime
-    if not query:
-        return "newer_than:30d", None
 
-    lowered = query.lower()
+    if not query:
+        return "newer_than:30d", None, 10
+
+    lowered = query.lower().strip()
+
+    # Number words dictionary
+    word_to_num = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
+
+    # Extract limit e.g. "two email", "2 emails", "give me 5"
+    limit = 10
+    limit_match = re.search(r'\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:emails?|messages?|mails?)?', lowered)
+    if limit_match:
+        val = limit_match.group(1)
+        if val.isdigit():
+            limit = int(val)
+        elif val in word_to_num:
+            limit = word_to_num[val]
 
     # Typo corrections
     typo_map = {
@@ -282,34 +299,44 @@ def _build_gmail_query(query: str) -> tuple[str, datetime.timedelta | None]:
         if typo in lowered:
             lowered = lowered.replace(typo, fix)
 
+    time_delta = None
+    gmail_query_parts = []
+
     # 1. Match hours e.g. "4 hrs", "4 hours", "4h"
     m_hrs = re.search(r'(\d+)\s*(?:hrs?|hours?)', lowered)
     if m_hrs:
         hours = int(m_hrs.group(1))
-        return f"newer_than:{hours}h", datetime.timedelta(hours=hours)
+        time_delta = datetime.timedelta(hours=hours)
+        gmail_query_parts.append(f"newer_than:{hours}h")
 
     # 2. Match days e.g. "2 days", "2d"
     m_days = re.search(r'(\d+)\s*(?:days?)', lowered)
-    if m_days:
+    if not m_hrs and m_days:
         days = int(m_days.group(1))
-        return f"newer_than:{days}d", datetime.timedelta(days=days)
+        time_delta = datetime.timedelta(days=days)
+        gmail_query_parts.append(f"newer_than:{days}d")
 
-    # 3. Match general recent keywords
-    if any(k in lowered for k in ["recent", "past", "last", "latest", "unread"]):
-        return "newer_than:7d", datetime.timedelta(days=7)
+    # Stop words for target term extraction
+    stop_words = {
+        "show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "latest",
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        "the", "my", "to", "about", "for", "with", "of", "in", "from", "unread", "hours", "hour", "hrs", "days", "day", "d", "h"
+    }
 
-    # 4. Clean filler and stop words to extract pure search target (e.g., "give one email from devfolio" -> "devfolio")
-    stop_words = {"show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "one", "1", "a", "an", "any", "some", "the", "my", "to", "about", "for", "with", "of", "in"}
-    words = [w for w in lowered.replace("from:", "from ").split() if w not in stop_words and w != "from"]
+    words = [w for w in lowered.replace("from:", " ").split() if w not in stop_words]
     target_term = " ".join(words).strip()
 
     if "from" in lowered and target_term:
-        return f"from:{target_term}", None
-    if target_term:
-        return target_term, None
-    return "newer_than:30d", None
+        gmail_query_parts.append(f"from:{target_term}")
+    elif target_term:
+        gmail_query_parts.append(target_term)
 
-    return "newer_than:30d", None
+    if not gmail_query_parts:
+        gmail_query_parts.append("newer_than:30d")
+
+    gmail_query = " ".join(gmail_query_parts)
+    return gmail_query, time_delta, limit
 
 
 async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -318,9 +345,7 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
     from db.session import AsyncSessionLocal
     from sqlalchemy import select, desc
     from models.email_metadata import EmailMetadata
-    from models.google_integration import GoogleIntegration
     from integrations.gmail_client import search_messages, fetch_message
-    from core.exceptions import IntegrationAuthRequiredError
 
     user_id_str = params.get("_user_id", "")
     query = params.get("query", "")
@@ -330,84 +355,38 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
     try:
         async with AsyncSessionLocal() as db:
             items = []
+            gmail_query, time_delta, requested_limit = _parse_query_params(query)
+
             if user_id_str:
                 uid = uuid.UUID(user_id_str)
 
-                # Sync brand-new unindexed messages from Gmail API in parallel
-                try:
-                    search_res = await search_messages(uid, "newer_than:7d", None, db)
-                    msgs = search_res.get("messages", [])
-                    if msgs:
-                        msg_ids = [m["id"] for m in msgs[:15] if m.get("id")]
-                        existing_res = await db.execute(
-                            select(EmailMetadata.gmail_message_id).where(
-                                EmailMetadata.user_id == uid,
-                                EmailMetadata.gmail_message_id.in_(msg_ids)
-                            )
-                        )
-                        existing_ids = set(existing_res.scalars().all())
-                        new_ids = [m_id for m_id in msg_ids if m_id not in existing_ids]
-
-                        if new_ids:
-                            logger.info(f"Syncing {len(new_ids)} brand-new Gmail messages into DB for user {uid}")
-                            fetch_results = await asyncio.gather(
-                                *[fetch_message(uid, m_id, db) for m_id in new_ids],
-                                return_exceptions=True
-                            )
-                            for m_id, full_msg in zip(new_ids, fetch_results):
-                                if isinstance(full_msg, Exception) or not isinstance(full_msg, dict):
-                                    continue
-                                headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
-                                sender = headers.get("from", "")
-                                subject = headers.get("subject", "")
-                                internal_ts = int(full_msg.get("internalDate", "0")) // 1000
-                                received_at = datetime.datetime.utcfromtimestamp(internal_ts)
-                                db.add(
-                                    EmailMetadata(
-                                        user_id=uid,
-                                        gmail_message_id=m_id,
-                                        sender=sender,
-                                        subject=subject,
-                                        summary=full_msg.get("snippet", ""),
-                                        priority="Medium",
-                                        category="General",
-                                        urgency=False,
-                                        reply_required=False,
-                                        suspicious_flag=False,
-                                        received_at=received_at,
-                                    )
-                                )
-                            await db.commit()
-                except Exception as sync_exc:
-                    logger.warning(f"On-demand Gmail sync in graph.py skipped: {sync_exc}")
-
-                gmail_query, time_delta = _build_gmail_query(query)
-
-                # 1. Instant DB lookup (sub-50ms) for indexed emails
+                # 1. First, search local indexed database
                 lowered_q = query.lower() if query else ""
-                stop_words = {"show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "one", "1", "a", "an", "any", "some", "the", "my", "to", "about", "for", "with", "of", "in", "from"}
-                words = [w for w in lowered_q.split() if w not in stop_words]
-                clean_term = " ".join(words).strip()
+                stop_words = {
+                    "show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "latest",
+                    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                    "the", "my", "to", "about", "for", "with", "of", "in", "from", "hours", "hour", "hrs", "days", "day"
+                }
+                clean_words = [w for w in lowered_q.replace("from:", " ").split() if w not in stop_words]
+                clean_term = " ".join(clean_words).strip()
 
-                stmt = select(EmailMetadata)
+                stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid)
+
                 if clean_term and len(clean_term) > 1:
                     stmt = stmt.where(
-                        (EmailMetadata.sender.ilike(f"%{clean_term}%")) | 
+                        (EmailMetadata.sender.ilike(f"%{clean_term}%")) |
                         (EmailMetadata.subject.ilike(f"%{clean_term}%")) |
                         (EmailMetadata.summary.ilike(f"%{clean_term}%"))
                     )
-                elif time_delta:
+                
+                if time_delta:
                     cutoff = datetime.datetime.now(datetime.timezone.utc) - time_delta
                     stmt = stmt.where(EmailMetadata.received_at >= cutoff)
-                
-                stmt = stmt.order_by(desc(EmailMetadata.received_at)).limit(50)
+
+                stmt = stmt.order_by(desc(EmailMetadata.received_at)).limit(requested_limit)
                 res_db = await db.execute(stmt)
                 emails_db = res_db.scalars().all()
-
-                # If no matching records for specific search term, fallback to top recent
-                if not emails_db and clean_term:
-                    res_fb = await db.execute(select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(25))
-                    emails_db = res_fb.scalars().all()
 
                 if emails_db:
                     for em in emails_db:
@@ -422,75 +401,94 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                             "received_at": em.received_at.isoformat() if em.received_at else None,
                         })
 
-                # 2. If DB had 0 records, fallback to live Gmail API search
-                if not items:
+                # 2. If DB has 0 matching items or specific term searched, query live Gmail API for real data
+                if len(items) < requested_limit:
                     try:
                         search_res = await search_messages(uid, gmail_query, None, db)
                         msgs = search_res.get("messages", [])
                         
-                        target_msgs = [m for m in msgs[:15] if m.get("id")]
+                        target_msgs = [m for m in msgs[:requested_limit] if m.get("id")]
                         if target_msgs:
-                            fetch_results = await asyncio.gather(
-                                *[fetch_message(uid, m["id"], db) for m in target_msgs],
-                                return_exceptions=True
-                            )
-                            for m, full_msg in zip(target_msgs, fetch_results):
-                                if isinstance(full_msg, Exception) or not isinstance(full_msg, dict):
-                                    continue
-                                msg_id = m["id"]
-                                headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
-                                sender = headers.get("from", "")
-                                subject = headers.get("subject", "")
-                                internal_ts = int(full_msg.get("internalDate", "0")) // 1000
-                                received_at = datetime.datetime.utcfromtimestamp(internal_ts)
+                            existing_ids = {item.get("gmail_message_id") for item in items}
+                            fetch_ids = [m["id"] for m in target_msgs if m["id"] not in existing_ids]
 
-                                existing = await db.scalar(
-                                    select(EmailMetadata).where(
-                                        EmailMetadata.user_id == uid,
-                                        EmailMetadata.gmail_message_id == msg_id,
-                                    )
+                            if fetch_ids:
+                                fetch_results = await asyncio.gather(
+                                    *[fetch_message(uid, m_id, db) for m_id in fetch_ids],
+                                    return_exceptions=True
                                 )
-                                if not existing:
-                                    new_email = EmailMetadata(
-                                        user_id=uid,
-                                        gmail_message_id=msg_id,
-                                        sender=sender,
-                                        subject=subject,
-                                        summary=full_msg.get("snippet", ""),
-                                        priority="Medium",
-                                        category="General",
-                                        urgency=False,
-                                        reply_required=False,
-                                        suspicious_flag=False,
-                                        received_at=received_at,
+                                for msg_id, full_msg in zip(fetch_ids, fetch_results):
+                                    if isinstance(full_msg, Exception) or not isinstance(full_msg, dict):
+                                        continue
+                                    headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                                    sender = headers.get("from", "")
+                                    subject = headers.get("subject", "")
+                                    internal_ts = int(full_msg.get("internalDate", "0")) // 1000
+                                    received_at = datetime.datetime.utcfromtimestamp(internal_ts)
+
+                                    existing = await db.scalar(
+                                        select(EmailMetadata).where(
+                                            EmailMetadata.user_id == uid,
+                                            EmailMetadata.gmail_message_id == msg_id,
+                                        )
                                     )
-                                    db.add(new_email)
-                                    await db.flush()
-                                    email_id = str(new_email.id)
-                                else:
-                                    email_id = str(existing.id)
+                                    if not existing:
+                                        new_email = EmailMetadata(
+                                            user_id=uid,
+                                            gmail_message_id=msg_id,
+                                            sender=sender,
+                                            subject=subject,
+                                            summary=full_msg.get("snippet", ""),
+                                            priority="Medium",
+                                            category="General",
+                                            urgency=False,
+                                            reply_required=False,
+                                            suspicious_flag=False,
+                                            received_at=received_at,
+                                        )
+                                        db.add(new_email)
+                                        await db.flush()
+                                        email_id = str(new_email.id)
+                                    else:
+                                        email_id = str(existing.id)
 
-                                items.append({
-                                    "id": email_id,
-                                    "gmail_message_id": msg_id,
-                                    "subject": subject,
-                                    "sender": sender,
-                                    "summary": full_msg.get("snippet", ""),
-                                    "priority": "Medium",
-                                    "category": "General",
-                                    "received_at": received_at.isoformat(),
-                                })
-                            await db.commit()
+                                    items.append({
+                                        "id": email_id,
+                                        "gmail_message_id": msg_id,
+                                        "subject": subject,
+                                        "sender": sender,
+                                        "summary": full_msg.get("snippet", ""),
+                                        "priority": "Medium",
+                                        "category": "General",
+                                        "received_at": received_at.isoformat(),
+                                    })
+                                await db.commit()
                     except Exception as exc:
-                        logger.warning(f"Live Gmail fetch fallback failed: {exc}")
+                        logger.warning(f"Live Gmail fetch fallback in run_inbox_agent: {exc}")
 
-            msg = f"Retrieved {len(items)} emails from inbox." if items else f"No emails found matching query '{query}'."
+            # Restrict strictly to requested limit
+            items = items[:requested_limit]
+
+            # Build rich human-readable summary response message
+            if items:
+                lines = [f"Found {len(items)} email(s) for your request:\n"]
+                for idx, em in enumerate(items, 1):
+                    subj = em.get("subject") or "(no subject)"
+                    sndr = em.get("sender") or "(unknown)"
+                    snip = em.get("summary") or ""
+                    snippet_str = f" — *{snip[:100]}*" if snip else ""
+                    lines.append(f"{idx}. **{subj}** from `{sndr}`{snippet_str}")
+                
+                lines.append("\nView detailed cards in the Results Sidebar ➔")
+                rich_msg = "\n".join(lines)
+            else:
+                rich_msg = f"No real emails found in your inbox matching '{query}'."
 
             return {
                 "agent": "inbox_agent",
                 "status": "completed",
                 "result": {
-                    "message": msg,
+                    "message": rich_msg,
                     "query": query,
                     "results_count": len(items),
                     "items": items,
@@ -508,7 +506,7 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
             "agent": "inbox_agent",
             "status": "completed",
             "result": {
-                "message": f"Inbox query completed for '{query}'",
+                "message": f"Unable to fetch emails for '{query}': {str(exc)}",
                 "query": query,
                 "results_count": 0,
                 "items": [],

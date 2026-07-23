@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: Optional[str] = None
     OPENAI_MODEL_PRIMARY: str = "openrouter/auto"
     OPENAI_MODEL_CLASSIFIER: str = "openrouter/auto"
+
+    # Groq & Gemini (Fallback Providers)
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    LLM_FALLBACK_ORDER: str = "openrouter,groq,gemini"
+
     ELEVENLABS_API_KEY: str = "sk_17c9803ed2daa90d1f648c98d93d21c5be8ffb63074beebb"
     ELEVENLABS_VOICE_ID: str = "OtEfb2LVzIE45wdYe54M"
     ELEVENLABS_STT_MODEL: str = "eleven-stt-v1"

@@ -88,8 +88,9 @@ export default function CommandCenter() {
         setQueryResults(items);
         setQueryTitle(`Command Results: "${currentInput}"`);
         setSelectedEmail(items[0]);
-        responseText = `Retrieved ${items.length} email(s) for your request. View detailed cards in the Results Sidebar ➔`;
-      } else if (respObj.result?.message) {
+      }
+
+      if (respObj.result?.message) {
         responseText = respObj.result.message;
       } else if (respObj.status === "clarification_needed") {
         responseText = respObj.result?.clarification || "Could you please clarify your request?";

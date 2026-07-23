@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from core.config import settings
+from core.llm_factory import invoke_llm_with_fallback
 from agents.supervisor.prompts import SYSTEM_PROMPT, CLARIFICATION_PROMPT
 
 logger = logging.getLogger("agents.supervisor.intent_router")
@@ -87,26 +88,30 @@ async def classify_intent(
                 "clarification_text": None,
             }
 
-    if llm is None:
-        llm = _default_llm()
-
     system_msg = SYSTEM_PROMPT + "\n\n" + CLARIFICATION_PROMPT
-
     context_summary = _summarize_context(context)
     user_msg = f"User command: '{raw_input}'\n\nCurrent context: {context_summary}"
-
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
     tools = _build_tool_definitions()
 
     try:
-        response = llm.bind_tools(tools).invoke([
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ])
+        if llm is not None:
+            response = llm.bind_tools(tools).invoke(messages)
+        else:
+            response, provider_used = invoke_llm_with_fallback(
+                messages=messages,
+                tools=tools,
+                is_classifier=True,
+            )
+            logger.info(f"Intent classification processed via provider '{provider_used}'")
 
         return _parse_llm_response(response, tools)
 
     except Exception as exc:
-        logger.exception(f"LLM intent classification failed: {exc}")
+        logger.exception(f"LLM intent classification failed across all providers: {exc}")
         return _fallback_classification(raw_input)
 
 
