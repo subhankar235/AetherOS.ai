@@ -7,7 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { initialTranscript, type CommandTranscript } from "@/lib/mock-data";
-import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight } from "lucide-react";
+import Link from "next/link";
+import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2 } from "lucide-react";
 
 interface MatchedEmail {
   id?: string;
@@ -36,9 +37,51 @@ export default function CommandCenter() {
   const [queryTitle, setQueryTitle] = useState<string>("");
   const [selectedEmail, setSelectedEmail] = useState<MatchedEmail | null>(null);
 
+  const getHeaders = async () => {
+    const token = await getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    } else {
+      headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
+    }
+    return headers;
+  };
+
+  const handleInstantApproveAndSend = async (draftId: string, bodyText: string) => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
+      headers["Content-Type"] = "application/json";
+
+      const prepRes = await fetch(`${apiUrl}/replies/drafts/${draftId}/prepare-send`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ current_body: bodyText }),
+      });
+      if (!prepRes.ok) throw new Error("Prepare send failed");
+      const prepData = await prepRes.json();
+
+      const sendRes = await fetch(`${apiUrl}/replies/drafts/${draftId}/send`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ approval_id: prepData.approval_id }),
+      });
+      if (sendRes.ok) {
+        alert("✅ Draft approved and sent successfully via Gmail API!");
+      } else {
+        const errTxt = await sendRes.text();
+        alert(`Failed to send email: ${errTxt}`);
+      }
+    } catch (err: any) {
+      alert(`Error sending draft: ${err.message || err}`);
+    }
+  };
+
   const send = async (mode: "voice" | "text") => {
     if (!input.trim() || loading) return;
-    const userMsg: CommandTranscript = {
+
+    const userMessage: CommandTranscript = {
       id: crypto.randomUUID(),
       role: "user",
       mode,
@@ -46,24 +89,17 @@ export default function CommandCenter() {
       at: new Date().toISOString(),
     };
 
+    setTranscript((t) => [...t, userMessage]);
     const currentInput = input;
     setInput("");
     setLoading(true);
-    setTranscript((t) => [...t, userMsg]);
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
       const formData = new FormData();
       formData.append("command", currentInput);
       formData.append("session_id", sessionId);
-
-      const token = await getToken();
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      } else {
-        headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
-      }
 
       const res = await fetch(`${apiUrl}/command`, {
         method: "POST",
@@ -72,11 +108,9 @@ export default function CommandCenter() {
       });
 
       if (!res.ok) {
-        throw new Error(`API error: ${res.statusText}`);
+        throw new Error(`Server returned ${res.status}`);
       }
 
-      const resultTypeHeader = res.headers.get('X-Result-Type') || 'default';
-      setResultType(resultTypeHeader);
       const data = await res.json();
       const respObj = data.response || {};
 
@@ -90,6 +124,9 @@ export default function CommandCenter() {
         setSelectedEmail(items[0]);
       }
 
+      const resultTypeHeader = res.headers.get('X-Result-Type') || 'default';
+      setResultType(resultTypeHeader);
+
       if (respObj.result?.message) {
         responseText = respObj.result.message;
       } else if (respObj.status === "clarification_needed") {
@@ -102,6 +139,28 @@ export default function CommandCenter() {
         responseText = respObj.result;
       }
 
+      const draftId = respObj.result?.draft_id || respObj.context_updates?.active_draft_id;
+      const draftBody = respObj.result?.draft_body || respObj.context_updates?.active_draft_body;
+
+      if (draftId && draftBody) {
+        try {
+          const newDraftObj = {
+            id: draftId,
+            body: draftBody,
+            status: "drafting",
+            created_at: new Date().toISOString(),
+            recipient: respObj.result?.target_email?.sender || items[0]?.sender || "Recipient",
+            subject: respObj.result?.target_email?.subject || items[0]?.subject || "Reply Draft",
+            original_body: items[0]?.summary || "Original Email Content",
+          };
+          const existing = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
+          const updated = [newDraftObj, ...existing.filter((d: any) => d.id !== draftId)];
+          localStorage.setItem("active_drafts_cache", JSON.stringify(updated));
+        } catch (err) {
+          console.warn("Error saving to active_drafts_cache:", err);
+        }
+      }
+
       const reply: CommandTranscript = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -109,6 +168,8 @@ export default function CommandCenter() {
         content: responseText,
         agentUsed: respObj.agent || "Supervisor",
         at: new Date().toISOString(),
+        draftId: draftId,
+        draftBody: draftBody,
       };
       setTranscript((t) => [...t, reply]);
     } catch (err: any) {
@@ -176,11 +237,11 @@ export default function CommandCenter() {
 
         <Card className="p-4">
           <div className="mb-3 text-xs font-medium text-muted-foreground">TRANSCRIPT</div>
-          <div className="max-h-[380px] space-y-3 overflow-y-auto pr-2">
+          <div className="max-h-[420px] space-y-4 overflow-y-auto pr-2">
             {transcript.map((m) => (
               <div
                 key={m.id}
-                className={`rounded-lg px-3 py-2 text-sm ${
+                className={`rounded-lg px-4 py-3 text-sm ${
                   m.role === "user"
                     ? "ml-8 bg-secondary"
                     : "mr-8 border border-primary/30 bg-primary/5"
@@ -197,7 +258,43 @@ export default function CommandCenter() {
                     </Badge>
                   )}
                 </div>
-                {m.content}
+                <div className="whitespace-pre-wrap leading-relaxed">{m.content}</div>
+
+                {/* DIRECT ACTION CARD FOR GENERATED DRAFT */}
+                {(m.draftId || m.agentUsed === "reply_agent" || m.content.includes("Reply Draft") || m.content.includes("draft")) && m.role === "assistant" && (
+                  <div className="mt-3 rounded-lg border border-primary/40 bg-background p-3.5 space-y-2.5 shadow-sm text-xs">
+                    <div className="flex items-center justify-between font-semibold">
+                      <span className="flex items-center gap-1.5 text-primary">
+                        <Sparkles className="h-4 w-4 text-primary" /> Generated Reply Draft
+                      </span>
+                      <Badge variant="outline" className="text-[10px] border-accent/40 text-accent">
+                        Awaiting Approval
+                      </Badge>
+                    </div>
+                    {m.draftBody && (
+                      <div className="rounded bg-muted/60 p-2.5 text-xs max-h-32 overflow-y-auto whitespace-pre-wrap border font-sans leading-relaxed">
+                        {m.draftBody}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Link href="/replies">
+                        <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90 font-semibold text-xs gap-1.5">
+                          Open Reply Drafts Page (/replies) <ChevronRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </Link>
+                      {m.draftId && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => handleInstantApproveAndSend(m.draftId!, m.draftBody || "")}
+                          className="text-xs gap-1"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5 text-accent" /> Approve & Send Now
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
