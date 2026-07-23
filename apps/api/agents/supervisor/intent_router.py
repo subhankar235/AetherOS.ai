@@ -72,11 +72,28 @@ async def classify_intent(
     llm: Optional[ChatOpenAI] = None,
 ) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
-    
+
+    # Ultra-fast path (0.1ms) for reply & draft intent
+    reply_kws = ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"]
+    if any(kw in lowered for kw in reply_kws):
+        logger.info(f"Fast-path matched reply/draft query: '{raw_input}'")
+        return {
+            "tasks": [{
+                "agent": "reply_agent",
+                "action": "draft",
+                "params": {
+                    "instructions": raw_input,
+                    "email_reference": "this"
+                }
+            }],
+            "intent": "reply_agent_draft",
+            "clarification_text": None,
+        }
+
     # Ultra-fast path (0.1ms) for common email search patterns
     email_kws = ["email", "emails", "inbox", "from", "unread", "recent", "past", "last", "hour", "day", "get", "give", "show", "find", "search"]
     if any(kw in lowered for kw in email_kws):
-        if not any(kw in lowered for kw in ["reply", "draft", "schedule", "meeting", "calendar"]):
+        if not any(kw in lowered for kw in reply_kws):
             logger.info(f"Fast-path matched email search query: '{raw_input}'")
             return {
                 "tasks": [{
