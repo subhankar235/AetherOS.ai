@@ -83,9 +83,9 @@ async def refresh_google_credentials(
     if creds.expired:
         logger.info(f"Google access token for user {integration.user_id} expired. Refreshing...")
         try:
-            creds.refresh(GoogleRequest())
-        except RefreshError as exc:
-            logger.warning(f"Google refresh token revoked or invalid for user {integration.user_id}: {exc}")
+            await asyncio.wait_for(asyncio.to_thread(creds.refresh, GoogleRequest()), timeout=8.0)
+        except (RefreshError, asyncio.TimeoutError) as exc:
+            logger.warning(f"Google refresh token revoked, invalid, or timed out for user {integration.user_id}: {exc}")
             # Mark integration as revoked in DB
             integration.revoked_at = datetime.now(timezone.utc)
             await db.commit()
