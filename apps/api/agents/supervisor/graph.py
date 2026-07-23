@@ -702,6 +702,8 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
 async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
     from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select, desc
+    from models.email_metadata import EmailMetadata
     from db.session import AsyncSessionLocal
     from agents.calendar_agent.extractor import extract_meeting_details, build_search_windows
     from agents.calendar_agent.availability import check_availability
@@ -716,10 +718,61 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
         async with AsyncSessionLocal() as db:
             uid = uuid.UUID(user_id_str) if user_id_str else uuid.uuid4()
 
+            # 0. Resolve target email from context/params if applicable
+            from agents.supervisor.context_manager import resolve_reference
+            target_email = None
+
+            ref_status, ref_data = await resolve_reference(raw_input, params)
+            if ref_data and ref_data.get("resolved_value"):
+                try:
+                    target_email = await db.scalar(
+                        select(EmailMetadata).where(
+                            EmailMetadata.id == uuid.UUID(str(ref_data["resolved_value"]))
+                        )
+                    )
+                except Exception:
+                    pass
+
+            if not target_email and (params.get("source_email_id") or params.get("active_email_id")):
+                target_email_id = params.get("source_email_id") or params.get("active_email_id")
+                try:
+                    target_email = await db.scalar(
+                        select(EmailMetadata).where(
+                            EmailMetadata.user_id == uid,
+                            EmailMetadata.id == uuid.UUID(str(target_email_id))
+                        )
+                    )
+                except Exception:
+                    pass
+
+            if not target_email and params.get("last_search_results") and isinstance(params["last_search_results"], list):
+                first_res = params["last_search_results"][0]
+                if isinstance(first_res, dict) and first_res.get("id"):
+                    try:
+                        target_email = await db.scalar(
+                            select(EmailMetadata).where(EmailMetadata.id == uuid.UUID(str(first_res["id"])))
+                        )
+                    except Exception:
+                        pass
+
+            if not target_email:
+                res_email = await db.execute(
+                    select(EmailMetadata)
+                    .where(EmailMetadata.user_id == uid)
+                    .order_by(desc(EmailMetadata.received_at))
+                    .limit(1)
+                )
+                target_email = res_email.scalar_one_or_none()
+
+            email_ctx = None
+            if target_email:
+                email_ctx = f"Subject: {target_email.subject}\nSender: {target_email.sender}\nSummary: {target_email.summary or ''}"
+
             # 1. Extract details via LLM
             details = await extract_meeting_details(
                 user_input=raw_input,
                 user_timezone=user_tz,
+                email_context=email_ctx,
             )
 
             # 2. Build candidate search windows
@@ -760,6 +813,7 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                 slot_start=selected_start,
                 slot_end=selected_end,
                 generate_meet=True,
+                source_email_id=target_email.id if target_email else None,
             )
 
             approval_id = await request_approval_for_event(
@@ -768,33 +822,84 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                 preview_result=preview,
             )
 
+            from integrations.meet_client import generate_unique_meet_link
+            meet_link = preview.get("meet_link") or generate_unique_meet_link()
+
             # 5. Format rich response message
             lines = [
                 f"📅 **Calendar Proposal**: **\"{details.title}\"**",
+            ]
+            if target_email:
+                lines.append(f"📧 **Target Email**: **\"{target_email.subject}\"** (From: `{target_email.sender}`)")
+
+            lines.extend([
                 f"⏱️ **Duration**: {details.duration_minutes} min | **Attendees**: {', '.join(details.participants) if details.participants else 'None'}",
                 f"🕒 **Proposed Slot**: `{selected_start}` to `{selected_end}`",
-                f"🎥 **Google Meet Video Conference**: Included (`https://meet.google.com/abc-defg-hij`)",
-            ]
+                f"🎥 **Google Meet Video Conference**: Included (`{meet_link}`)",
+            ])
             if double_book_warnings:
                 lines.append(f"\n⚠️ **Double-Booking Warning**: {len(double_book_warnings)} pending proposal(s) overlap with this candidate window!")
 
             lines.append("\n👉 Review & approve on the **Calendar Page** (/calendar) or **Approvals Page** (/approvals)!")
             rich_msg = "\n".join(lines)
+            formatted_attendees = []
+            for p in details.participants:
+                name = p
+                email = p
+                if "<" in p and ">" in p:
+                    parts = p.split("<")
+                    name = parts[0].strip()
+                    email = parts[1].replace(">", "").strip()
+                formatted_attendees.append({"name": name, "email": email})
+
+            source_email_obj = {
+                "thread_id": getattr(target_email, "thread_id", None) or "",
+                "message_id": (target_email.gmail_message_id or str(target_email.id)) if target_email else "",
+                "subject": target_email.subject if target_email else "",
+                "from": {
+                    "name": target_email.sender.split("<")[0].strip() if target_email and "<" in target_email.sender else (target_email.sender if target_email else ""),
+                    "email": target_email.sender.split("<")[1].replace(">", "").strip() if target_email and "<" in target_email.sender else (target_email.sender if target_email else "")
+                },
+                "received_at": target_email.received_at.isoformat() if target_email and target_email.received_at else "",
+                "summary": target_email.summary or "" if target_email else ""
+            }
+
+            meeting_obj = {
+                "id": preview["preview_id"],
+                "title": details.title,
+                "start_time": selected_start,
+                "end_time": selected_end,
+                "timezone": user_tz,
+                "location": "Google Meet",
+                "meet_link": meet_link,
+                "attendees": formatted_attendees
+            }
 
             return {
                 "agent": "calendar_agent",
                 "status": "waiting_for_user",
                 "result": {
-                    "message": rich_msg,
+                    "status": "success",
+                    "message": "Meeting scheduled successfully.",
+                    "meeting": meeting_obj,
+                    "source_email": source_email_obj,
+                    "rich_message": rich_msg,
                     "title": details.title,
                     "duration_minutes": details.duration_minutes,
                     "participants": details.participants,
+                    "target_email": {
+                        "subject": target_email.subject,
+                        "sender": target_email.sender,
+                        "id": str(target_email.id),
+                    } if target_email else None,
                     "free_slots": free_slots,
                     "double_booking_warnings": double_book_warnings,
                     "preview_id": preview["preview_id"],
                     "approval_id": str(approval_id),
                     "start": selected_start,
                     "end": selected_end,
+                    "meet_link": meet_link,
+                    "hangout_link": meet_link,
                     "event_body": preview.get("event_body"),
                 },
                 "context_updates": {
@@ -808,7 +913,10 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
         return {
             "agent": "calendar_agent",
             "status": "error",
-            "result": {"error": f"Failed to process calendar request: {str(exc)}"},
+            "result": {
+                "status": "error",
+                "message": f"Failed to schedule meeting: {str(exc)}"
+            },
             "context_updates": {},
             "requires_approval": False,
         }
