@@ -361,6 +361,9 @@ export interface CommandTranscript {
   content: string;
   agentUsed?: string;
   at: string;
+  draftId?: string;
+  draftBody?: string;
+  targetEmail?: any;
 }
 
 export const initialTranscript: CommandTranscript[] = [
