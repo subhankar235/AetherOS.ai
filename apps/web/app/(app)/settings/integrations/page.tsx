@@ -164,10 +164,10 @@ export default function IntegrationsPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => handleConnectGoogle("https://www.googleapis.com/auth/calendar")}
+                      onClick={() => handleConnectGoogle("https://www.googleapis.com/auth/gmail.send,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar")}
                       disabled={actionLoading}
                     >
-                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Re-consent / Grant Scopes
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Reconnect Google / Grant Send Scopes
                     </Button>
                     <Button
                       size="sm"

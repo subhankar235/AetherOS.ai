@@ -49,33 +49,57 @@ async def resolve_reference(
     context: dict[str, Any],
 ) -> tuple[str, Optional[dict[str, Any]]]:
     lowered = text.lower().strip()
+    last_results = context.get("last_search_results", [])
 
-    # 1. Exact pattern lookup
+    # 1. Check for ordinal index references (e.g. "first email", "1st email", "first one", "second email", "2nd one")
+    ordinal_0_keywords = ["first", "1st", "number 1", "email 1", "email #1", "first one", "first email"]
+    ordinal_1_keywords = ["second", "2nd", "number 2", "email 2", "email #2", "second one", "second email"]
+    ordinal_2_keywords = ["third", "3rd", "number 3", "email 3", "email #3", "third one", "third email"]
+
+    if any(k in lowered for k in ordinal_0_keywords):
+        if last_results and len(last_results) > 0:
+            target = last_results[0]
+            target_id = target.get("id") if isinstance(target, dict) else str(target)
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": target_id, "resolved_email": target}
+
+    if any(k in lowered for k in ordinal_1_keywords):
+        if last_results and len(last_results) > 1:
+            target = last_results[1]
+            target_id = target.get("id") if isinstance(target, dict) else str(target)
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": target_id, "resolved_email": target}
+
+    if any(k in lowered for k in ordinal_2_keywords):
+        if last_results and len(last_results) > 2:
+            target = last_results[2]
+            target_id = target.get("id") if isinstance(target, dict) else str(target)
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": target_id, "resolved_email": target}
+
+    # 2. Exact pattern lookup
     exact = REFERENCE_PATTERNS.get(lowered)
     if exact is not None:
         if exact.startswith("last_search_results_index_"):
             idx = int(exact.rsplit("_", 1)[1])
-            results = context.get("last_search_results", [])
-            if idx < len(results):
-                return "resolved", {"resolved_email": results[idx]}
+            if idx < len(last_results):
+                target = last_results[idx]
+                target_id = target.get("id") if isinstance(target, dict) else str(target)
+                return "resolved", {"resolved_reference": "active_email_id", "resolved_value": target_id, "resolved_email": target}
             return "ambiguous", None
 
         resolved_value = context.get(exact)
         if resolved_value is not None:
             return "resolved", {"resolved_reference": exact, "resolved_value": resolved_value}
 
-    # 2. Heuristic check for email references (e.g. "this", "it", "that", "for this", "draft for", "reply to")
+    # 3. Heuristic check for email references (e.g. "this", "it", "that", "for this", "draft for", "reply to")
     email_pronoun_keywords = ["this", "it", "that", "for this", "the email", "for it", "make draft", "draft", "reply"]
     if any(kw in lowered for kw in email_pronoun_keywords):
-        active_email = context.get("active_email_id")
-        if active_email:
-            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": active_email}
-
-        last_results = context.get("last_search_results", [])
         if last_results:
             first_res = last_results[0]
             first_id = first_res.get("id") if isinstance(first_res, dict) else first_res
             return "resolved", {"resolved_reference": "active_email_id", "resolved_value": first_id}
+
+        active_email = context.get("active_email_id")
+        if active_email:
+            return "resolved", {"resolved_reference": "active_email_id", "resolved_value": active_email}
 
         # If user explicitly asked for draft/reply/this, signal context search
         if any(term in lowered for term in ["draft", "reply", "this", "it"]):

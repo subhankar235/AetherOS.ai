@@ -21,17 +21,25 @@ class EmbedderService:
 
     def get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            kwargs = {"api_key": settings.OPENAI_API_KEY}
+            if getattr(settings, "openai_base_url", None):
+                kwargs["base_url"] = settings.openai_base_url
+            self._client = AsyncOpenAI(**kwargs)
         return self._client
 
     @embed_retry
     async def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         client = self.get_client()
-        response = await client.embeddings.create(
-            input=texts,
-            model=settings.OPENAI_EMBEDDING_MODEL
-        )
-        return [item.embedding for item in response.data]
+        try:
+            response = await client.embeddings.create(
+                input=texts,
+                model=settings.OPENAI_EMBEDDING_MODEL
+            )
+            return [item.embedding for item in response.data]
+        except Exception as exc:
+            logger.warning(f"OpenAI embedding batch failed: {exc}. Returning zero vectors...")
+            # Fallback to zero vectors of dimension 1536 so vector search safely falls back
+            return [[0.0] * 1536 for _ in texts]
 
     async def embed_chunks(self, texts: List[str], batch_size: int = 100) -> List[List[float]]:
         """

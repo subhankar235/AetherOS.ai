@@ -67,6 +67,9 @@ async def send_message(
     """
     Sends a MIME-formatted email.
     """
+    from googleapiclient.errors import HttpError
+    from core.exceptions import IntegrationAuthRequiredError
+
     await limiter.check_rate_limit(f"gmail:{user_id}", limit=settings.RATE_LIMIT_GMAIL_PER_MIN, period=60)
     service = await _get_gmail_service(user_id, db, [GoogleScopes.GMAIL_SEND])
     
@@ -78,8 +81,16 @@ async def send_message(
     payload = {"raw": raw_message}
     if thread_id:
         payload["threadId"] = thread_id
-        
-    return service.users().messages().send(userId="me", body=payload).execute()
+
+    try:
+        return service.users().messages().send(userId="me", body=payload).execute()
+    except HttpError as exc:
+        if exc.resp.status in (401, 403) and ("insufficient" in str(exc).lower() or "scope" in str(exc).lower()):
+            logger.warning(f"Google API send failed due to insufficient permissions for user {user_id}: {exc}")
+            raise IntegrationAuthRequiredError(
+                "Google Account missing email send permission. Please go to Settings -> Integrations and click 'Reconnect Google' to grant full send access."
+            ) from exc
+        raise
 
 
 @gmail_retry

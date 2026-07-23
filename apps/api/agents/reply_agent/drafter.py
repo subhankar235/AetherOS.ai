@@ -131,43 +131,77 @@ async def generate_draft(
 
     user_prompt = "\n---\n".join(prompt_parts)
 
-    llm_kwargs = {
-        "model": getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
-        "temperature": 0.3,
-        "api_key": settings.OPENAI_API_KEY,
-    }
-    if getattr(settings, "openai_base_url", None):
-        llm_kwargs["base_url"] = settings.openai_base_url
+    from core.llm_factory import get_provider_candidates
 
-    llm = ChatOpenAI(**llm_kwargs)
+    candidates = get_provider_candidates(is_classifier=False)
+    if not candidates:
+        candidates = [{
+            "name": "openai",
+            "model": getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
+            "api_key": settings.OPENAI_API_KEY,
+            "base_url": getattr(settings, "openai_base_url", None),
+        }]
 
-    structured_llm = llm.with_structured_output(DraftOutput)
+    result: Optional[DraftOutput] = None
+    last_exc: Optional[Exception] = None
 
-    try:
-        result = await structured_llm.ainvoke([
-            {"role": "system", "content": DRAFT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ])
-    except Exception as exc:
-        logger.exception(f"Draft generation LLM call failed: {exc}")
-        # Contextually tailored smart fallback draft generation
+    for cand in candidates:
+        try:
+            logger.info(f"Attempting draft generation via LLM provider '{cand['name']}' using model '{cand['model']}'...")
+            kwargs = {
+                "model": cand["model"],
+                "temperature": 0.3,
+                "api_key": cand["api_key"],
+            }
+            if cand.get("base_url"):
+                kwargs["base_url"] = cand["base_url"]
+
+            llm = ChatOpenAI(**kwargs)
+            try:
+                structured_llm = llm.with_structured_output(DraftOutput)
+                result = await structured_llm.ainvoke([
+                    {"role": "system", "content": DRAFT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ])
+            except Exception as s_exc:
+                logger.info(f"Structured output json_schema method failed for '{cand['name']}': {s_exc}. Retrying with JSON prompt fallback...")
+                json_prompt = (
+                    f"{user_prompt}\n\n"
+                    f"IMPORTANT: You MUST respond strictly in valid JSON format with no extra markdown wrapping:\n"
+                    f'{{"body": "reply draft body text", "has_gaps": false, "gap_notes": []}}'
+                )
+                raw_resp = await llm.ainvoke([
+                    {"role": "system", "content": DRAFT_SYSTEM_PROMPT},
+                    {"role": "user", "content": json_prompt},
+                ])
+                raw_content = getattr(raw_resp, "content", str(raw_resp)).strip()
+                if "```json" in raw_content:
+                    raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw_content:
+                    raw_content = raw_content.split("```")[1].split("```")[0].strip()
+
+                parsed = json.loads(raw_content)
+                result = DraftOutput(
+                    body=parsed.get("body", raw_content),
+                    has_gaps=bool(parsed.get("has_gaps", False)),
+                    gap_notes=parsed.get("gap_notes", []),
+                )
+
+            if result and result.body:
+                logger.info(f"Draft generation succeeded using provider '{cand['name']}'.")
+                break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(f"Draft generation attempt failed for provider '{cand['name']}': {exc}")
+
+    if not result:
+        logger.error(f"All LLM provider attempts failed for draft generation. Last error: {last_exc}")
         sender_clean = sender.split("<")[0].strip().replace('"', '') or "there"
-        if "security" in subject.lower() or "alert" in subject.lower():
-            fallback_body = (
-                f"Hi {sender_clean},\n\n"
-                f"Thank you for the security notification regarding '{subject}'. "
-                f"I have reviewed the access activity described: \"{body_text[:150]}\" and confirmed that this activity is recognized. "
-                f"No further action is required at this time.\n\n"
-                f"Best regards,"
-            )
-        else:
-            fallback_body = (
-                f"Hi {sender_clean},\n\n"
-                f"Thank you for your email regarding '{subject}'.\n\n"
-                f"Regarding your message: \"{body_text[:200]}\"\n\n"
-                f"I have received the details and will follow up with you shortly.\n\n"
-                f"Best regards,"
-            )
+        fallback_body = (
+            f"Hi {sender_clean},\n\n"
+            f"Thank you for your email regarding '{subject}'. I have received your message and will review the details to follow up with you shortly.\n\n"
+            f"Best regards,"
+        )
         result = DraftOutput(
             body=fallback_body,
             has_gaps=False,

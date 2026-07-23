@@ -17,16 +17,21 @@ logger = logging.getLogger("integrations.google_auth")
 
 
 class GoogleScopes:
+    GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+    GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+    GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
+    CALENDAR = "https://www.googleapis.com/auth/calendar"
+
     BASE = [
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
         "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/calendar",
     ]
-    GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
-    GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
-    GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
-    CALENDAR = "https://www.googleapis.com/auth/calendar"
 
 
 def check_scopes_granted(integration: GoogleIntegration, required_scopes: list[str]) -> bool:

@@ -603,7 +603,14 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                 except Exception:
                     pass
 
-            if not target_email and email_ref and email_ref not in ("last email", "this", "it", "that", "the first one"):
+            ignored_refs = (
+                "last email", "the last email", "this", "it", "that",
+                "first one", "the first one", "first email", "the first email", "1st email",
+                "second one", "the second one", "second email", "the second email", "2nd email",
+                "third one", "the third one", "third email", "the third email", "3rd email",
+                "email 1", "email 2", "email 3"
+            )
+            if not target_email and email_ref and email_ref.lower().strip() not in ignored_refs:
                 stmt = select(EmailMetadata).where(
                     EmailMetadata.user_id == uid,
                     (EmailMetadata.sender.ilike(f"%{email_ref}%")) | (EmailMetadata.subject.ilike(f"%{email_ref}%"))
