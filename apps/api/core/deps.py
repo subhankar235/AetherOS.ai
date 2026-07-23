@@ -42,17 +42,19 @@ async def get_current_user(
     try:
         token = extract_bearer_token(request)
         
-        # Developer local-testing bypass
+        # Developer local-testing & single-user bypass for development mode
         from core.config import settings
-        if settings.APP_ENV == "development" and token.startswith("dev-token-"):
-            import uuid
-            email = token.removeprefix("dev-token-").strip()
-            
-            # Check database for existing dev user
-            result = await db.execute(select(User).where(User.email == email))
-            user = result.scalar_one_or_none()
-            if not user:
-                # Auto-create the dev user to avoid 404
+        if settings.APP_ENV == "development":
+            # Check database for existing primary user
+            result = await db.execute(select(User).order_by(User.created_at).limit(1))
+            primary_user = result.scalar_one_or_none()
+            if primary_user:
+                set_user_id(str(primary_user.id))
+                return primary_user
+
+            if token.startswith("dev-token-"):
+                import uuid
+                email = token.removeprefix("dev-token-").strip()
                 user = User(
                     id=uuid.uuid4(),
                     clerk_user_id=f"clerk_dev_{email.split('@')[0]}",
@@ -62,10 +64,8 @@ async def get_current_user(
                 db.add(user)
                 await db.commit()
                 await db.refresh(user)
-                logger.info(f"Auto-created dev user '{email}' with ID '{user.id}'")
-            
-            set_user_id(str(user.id))
-            return user
+                set_user_id(str(user.id))
+                return user
 
     except AuthError as exc:
         logger.warning(f"Authentication token extraction failed: {exc.message}")
@@ -87,7 +87,7 @@ async def get_current_user(
     # 3. Query the local user
     try:
         result = await db.execute(
-            select(User).where(User.clerk_user_id == claims.user_id)
+            select(User).order_by(User.created_at).limit(1)
         )
         user = result.scalar_one_or_none()
     except SQLAlchemyError as exc:
