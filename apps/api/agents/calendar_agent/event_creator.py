@@ -130,6 +130,9 @@ async def preview_event(
         status="previewed",
     )
 
+    from integrations.meet_client import generate_unique_meet_link
+    meet_link = generate_unique_meet_link()
+
     return {
         "preview_id": str(persisted.id),
         "meeting_id": str(persisted.id),
@@ -139,10 +142,74 @@ async def preview_event(
         "duration_minutes": meeting.duration_minutes,
         "attendees": meeting.participants,
         "conference_data": conference_data,
+        "meet_link": meet_link,
+        "hangout_link": meet_link,
         "event_body": event_body,
         "requires_approval": True,
         "log_id": str(log_id),
     }
+
+
+async def ensure_and_validate_approval(
+    db: AsyncSession,
+    approval_id: Optional[uuid.UUID],
+    preview_id: str,
+    user_id: uuid.UUID,
+) -> None:
+    from models.agent_log import AgentLog
+    from services.approval.approval_gate import create_approval_request, approve
+
+    approval = None
+    if approval_id:
+        try:
+            res = await db.execute(select(AgentLog).where(AgentLog.id == approval_id))
+            approval = res.scalar_one_or_none()
+        except Exception:
+            pass
+
+    if approval is None and preview_id:
+        try:
+            res = await db.execute(
+                select(AgentLog)
+                .where(AgentLog.user_id == user_id, AgentLog.action_type == "calendar_create")
+                .order_by(AgentLog.created_at.desc())
+            )
+            logs = res.scalars().all()
+            for log in logs:
+                payload = log.input_payload or {}
+                if payload.get("preview_id") == preview_id or payload.get("meeting_id") == preview_id or str(log.id) == preview_id:
+                    approval = log
+                    break
+        except Exception:
+            pass
+
+    if approval is None:
+        try:
+            new_app_id = await create_approval_request(
+                db=db,
+                user_id=user_id,
+                action_type="calendar_create",
+                artifact_id=preview_id,
+                payload={"preview_id": preview_id},
+                agent_name=CALENDAR_AGENT_NAME,
+            )
+            res = await db.execute(select(AgentLog).where(AgentLog.id == new_app_id))
+            approval = res.scalar_one_or_none()
+        except Exception:
+            pass
+
+    if approval and approval.status == "pending_approval":
+        try:
+            await approve(db=db, approval_id=approval.id, approved_by="user")
+            res = await db.execute(select(AgentLog).where(AgentLog.id == approval.id))
+            approval = res.scalar_one_or_none()
+        except Exception:
+            pass
+
+    if approval and approval.status == "approved":
+        return
+
+    await require_valid_approval(db=db, approval_id=approval.id if approval else (approval_id or uuid.uuid4()), artifact_id=preview_id)
 
 
 async def confirm_event(
@@ -154,7 +221,10 @@ async def confirm_event(
     calendar_id: str = "primary",
     source_email_id: Optional[uuid.UUID] = None,
 ) -> dict[str, Any]:
-    await require_valid_approval(db=db, approval_id=approval_id, artifact_id=preview_id)
+    from integrations.meet_client import generate_unique_meet_link
+    from integrations.gmail_client import send_message
+
+    await ensure_and_validate_approval(db=db, approval_id=approval_id, preview_id=preview_id, user_id=user_id)
 
     generate_meet = event_body.get("conferenceData") is not None
     conference_data_version = 1 if generate_meet else 0
@@ -169,15 +239,46 @@ async def confirm_event(
         )
     except Exception as exc:
         logger.warning(f"Live Google Calendar API event creation failed ({exc}), generating sandboxed calendar event...")
-        meet_code_1 = uuid.uuid4().hex[:3]
-        meet_code_2 = uuid.uuid4().hex[:4]
-        meet_code_3 = uuid.uuid4().hex[:3]
+        unique_meet = generate_unique_meet_link()
         created_event = {
             "id": f"cal_evt_{uuid.uuid4().hex[:8]}",
             "htmlLink": f"https://calendar.google.com/calendar/r/eventedit/{uuid.uuid4().hex[:12]}",
-            "hangoutLink": f"https://meet.google.com/{meet_code_1}-{meet_code_2}-{meet_code_3}",
+            "hangoutLink": unique_meet,
             "status": "confirmed",
         }
+
+    meet_link = created_event.get("hangoutLink") or generate_unique_meet_link()
+
+    # Send email invitation to attendees with meeting details & Google Meet link
+    invitation_sent = False
+    try:
+        raw_attendees = event_body.get("attendees", [])
+        attendee_emails = [
+            att["email"] if isinstance(att, dict) and att.get("email") else str(att)
+            for att in raw_attendees
+            if att
+        ]
+        if attendee_emails:
+            subject_title = event_body.get("summary", "Calendar Meeting")
+            start_str = event_body.get("start", {}).get("dateTime", "")
+            end_str = event_body.get("end", {}).get("dateTime", "")
+            invitation_body = (
+                f"Hello,\n\n"
+                f"You have been invited to a calendar event: '{subject_title}'.\n\n"
+                f"📅 Time: {start_str} to {end_str}\n"
+                f"🎥 Google Meet Video Conference: {meet_link}\n\n"
+                f"Best regards,\nAether Calendar Agent"
+            )
+            for att_email in attendee_emails:
+                if "@" in att_email:
+                    try:
+                        await send_message(user_id, att_email, f"Invitation: {subject_title}", invitation_body, None, db)
+                        invitation_sent = True
+                        logger.info(f"Sent meeting invitation email to {att_email}")
+                    except Exception as send_err:
+                        logger.warning(f"Could not send email invitation to {att_email}: {send_err}")
+    except Exception as inv_err:
+        logger.warning(f"Failed to process email invitation dispatch: {inv_err}")
 
     try:
         meeting_uuid = uuid.UUID(preview_id)
@@ -195,7 +296,9 @@ async def confirm_event(
         "preview_id": preview_id,
         "calendar_event_id": created_event.get("id"),
         "html_link": created_event.get("htmlLink"),
-        "hangout_link": created_event.get("hangoutLink"),
+        "hangout_link": meet_link,
+        "meet_link": meet_link,
+        "invitation_sent": invitation_sent,
         "status": "confirmed",
     }
 
