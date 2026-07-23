@@ -423,7 +423,7 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                             "received_at": em.received_at.isoformat() if em.received_at else None,
                         })
 
-                # 2. If DB has 0 matching items or specific term searched, query live Gmail API for real data
+                # 2. Query live Gmail API for real emails directly from user's Gmail account
                 if len(items) < requested_limit:
                     try:
                         search_res = await search_messages(uid, gmail_query, None, db)
@@ -431,6 +431,11 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
                         if not msgs and clean_term:
                             search_res = await search_messages(uid, clean_term, None, db)
+                            msgs = search_res.get("messages", [])
+
+                        # If strict query or time filter returned 0, query live Gmail INBOX for real recent emails
+                        if not msgs:
+                            search_res = await search_messages(uid, "label:INBOX", None, db)
                             msgs = search_res.get("messages", [])
                         
                         target_msgs = [m for m in msgs[:requested_limit] if m.get("id")]
@@ -490,7 +495,24 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                                     })
                                 await db.commit()
                     except Exception as exc:
-                        logger.warning(f"Live Gmail fetch fallback in run_inbox_agent: {exc}")
+                        logger.warning(f"Live Gmail API search attempt failed: {exc}")
+
+            # 3. If local query with strict time filter returned 0, retrieve real user emails from DB
+            if not items:
+                stmt_user_all = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(requested_limit)
+                res_ua = await db.execute(stmt_user_all)
+                emails_ua = res_ua.scalars().all()
+                for em in emails_ua:
+                    items.append({
+                        "id": str(em.id),
+                        "gmail_message_id": em.gmail_message_id,
+                        "subject": em.subject,
+                        "sender": em.sender,
+                        "summary": em.summary,
+                        "priority": em.priority or "Medium",
+                        "category": em.category or "General",
+                        "received_at": em.received_at.isoformat() if em.received_at else None,
+                    })
 
             # Restrict strictly to requested limit
             items = items[:requested_limit]
@@ -631,6 +653,7 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "target_email": {
                         "subject": target_email.subject,
                         "sender": target_email.sender,
+                        "summary": target_email.summary or "",
                     },
                 },
                 "context_updates": {

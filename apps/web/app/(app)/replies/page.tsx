@@ -59,15 +59,23 @@ export default function RepliesPage() {
 
             const updatedList: DraftItem[] = data.map((apiItem) => {
               const existingLocal = currentMap.get(apiItem.id);
+              const cached = cachedMap.get(apiItem.id);
               // Preserve local body if user is actively typing
+              let merged = { ...apiItem };
               if (
                 existingLocal &&
                 existingLocal.body !== apiItem.body &&
                 isUserEditingRef.current.has(apiItem.id)
               ) {
-                return { ...apiItem, body: existingLocal.body };
+                merged.body = existingLocal.body;
               }
-              return apiItem;
+              // Override API fallback dummy text with cache values
+              if (cached) {
+                if (merged.recipient === "Recipient" && cached.recipient) merged.recipient = cached.recipient;
+                if (merged.subject === "Reply Draft" && cached.subject) merged.subject = cached.subject;
+                if (merged.original_body === "Original Email Content" && cached.original_body) merged.original_body = cached.original_body;
+              }
+              return merged;
             });
 
             // Include any locally generated draft from command page not yet in DB response
@@ -231,6 +239,44 @@ export default function RepliesPage() {
     }
   };
 
+  const [generating, setGenerating] = useState(false);
+
+  const handleGenerateNewDraft = async () => {
+    setGenerating(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token = await getToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      } else {
+        headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
+      }
+
+      const formData = new FormData();
+      formData.append("command", "draft a reply to recent email");
+      formData.append("session_id", crypto.randomUUID());
+
+      const res = await fetch(`${apiUrl}/command`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+
+      if (res.ok) {
+        await fetchDrafts();
+      } else {
+        const errTxt = await res.text();
+        alert(`Failed to generate draft: ${errTxt}`);
+      }
+    } catch (err: any) {
+      console.error("Error generating new draft:", err);
+      alert(`Error generating draft: ${err.message || err}`);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex items-center justify-between">
@@ -240,17 +286,28 @@ export default function RepliesPage() {
             Every draft waits behind an approval gate. Review the original email, edit the draft, and click Approve & Send.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setLoading(true);
-            fetchDrafts().finally(() => setLoading(false));
-          }}
-          className="gap-2"
-        >
-          <RotateCw className="h-4 w-4" /> Refresh Drafts
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={handleGenerateNewDraft}
+            disabled={generating}
+            className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {generating ? "Generating Draft..." : "Generate New Draft"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setLoading(true);
+              fetchDrafts().finally(() => setLoading(false));
+            }}
+            className="gap-2"
+          >
+            <RotateCw className="h-4 w-4" /> Refresh
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -258,8 +315,18 @@ export default function RepliesPage() {
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : drafts.length === 0 ? (
-        <Card className="p-8 text-center text-sm text-muted-foreground">
-          No active reply drafts. Use the Command Center or Inbox to generate a reply draft!
+        <Card className="p-8 text-center space-y-4">
+          <div className="text-sm text-muted-foreground">
+            No active reply drafts currently in queue. Click below to generate a new AI draft from your recent email!
+          </div>
+          <Button
+            onClick={handleGenerateNewDraft}
+            disabled={generating}
+            className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {generating ? "Generating Draft..." : "Generate New Draft Now"}
+          </Button>
         </Card>
       ) : (
         <div className="space-y-6">

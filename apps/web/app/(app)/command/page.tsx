@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { initialTranscript, type CommandTranscript } from "@/lib/mock-data";
+import { type CommandTranscript } from "@/lib/mock-data";
 import Link from "next/link";
 import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2 } from "lucide-react";
 
@@ -23,7 +23,7 @@ interface MatchedEmail {
 
 export default function CommandCenter() {
   const { getToken } = useAuth();
-  const [transcript, setTranscript] = useState<CommandTranscript[]>(initialTranscript);
+  const [transcript, setTranscript] = useState<CommandTranscript[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -156,7 +156,7 @@ export default function CommandCenter() {
             created_at: new Date().toISOString(),
             recipient: respObj.result?.target_email?.sender || items[0]?.sender || "Recipient",
             subject: respObj.result?.target_email?.subject || items[0]?.subject || "Reply Draft",
-            original_body: items[0]?.summary || "Original Email Content",
+            original_body: respObj.result?.target_email?.summary || items[0]?.summary || "",
           };
           const existing = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
           const updated = [newDraftObj, ...existing.filter((d: any) => d.id !== draftId)];
