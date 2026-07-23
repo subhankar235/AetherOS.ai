@@ -1,24 +1,17 @@
-from celery import Celery
-from celery.schedules import crontab
-from core.config import settings
+from types import SimpleNamespace
 
-celery_app = Celery(
-    "aetheros_tasks",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND
-)
+class NoOpTask:
+    """A no‑op task decorator used in place of Celery.
 
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    beat_schedule={
-        "refresh-research-cache-every-6-hours": {
-            "task": "workers.research_cache_refresh.refresh_research_cache",
-            "schedule": crontab(hour="*/6"),
-            "options": {"queue": "periodic"},
-        },
-    },
-)
+    It accepts any positional or keyword arguments (e.g., name, bind, max_retries)
+    and simply returns the original function unchanged.
+    """
+    def __call__(self, *decorator_args, **decorator_kwargs):
+        # When used as @celery_app.task(...), this method receives the decorator arguments.
+        # It must return a function that will receive the original function.
+        def decorator(func):
+            return func
+        return decorator
+
+# Export a dummy celery_app with a task attribute that behaves like the real @celery_app.task
+celery_app = SimpleNamespace(task=NoOpTask())

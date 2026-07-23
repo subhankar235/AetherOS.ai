@@ -31,16 +31,9 @@ async def dashboard_summary(
         )
 
         if not new_count:
-            total_db_count = await db.scalar(select(func.count(EmailMetadata.id)))
-            if total_db_count:
-                new_count = total_db_count
-                high_priority_count = await db.scalar(
-                    select(func.count(EmailMetadata.id)).where(EmailMetadata.priority == "High")
-                )
-                unread_count = total_db_count
-            else:
-                high_priority_count = 0
-                unread_count = 0
+            new_count = 0
+            high_priority_count = 0
+            unread_count = 0
         else:
             high_priority_count = await db.scalar(
                 select(func.count(EmailMetadata.id))

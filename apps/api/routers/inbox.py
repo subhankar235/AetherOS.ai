@@ -80,7 +80,7 @@ async def list_emails(
         result = await db.execute(stmt)
         items = result.scalars().all()
         if not items:
-            stmt_fallback = select(EmailMetadata)
+            stmt_fallback = select(EmailMetadata).where(EmailMetadata.user_id == user.id)
             if priority:
                 stmt_fallback = stmt_fallback.where(EmailMetadata.priority == priority)
             if category:
@@ -95,8 +95,9 @@ async def list_emails(
             result_type = "sender"
         if hours or days:
             result_type = "time" if result_type == "default" else "combined"
-        # Use FastAPI Response to add header
-        response = Response(content=JSONResponse(content=[e.dict() for e in email_responses]).body, media_type="application/json")
+
+        content_json = f"[{','.join(e.json() for e in email_responses)}]"
+        response = Response(content=content_json, media_type="application/json")
         response.headers["X-Result-Type"] = result_type
         return response
     except Exception as e:
@@ -118,9 +119,7 @@ async def get_email(
     )
     email = result.scalar_one_or_none()
     if not email:
-        # Fallback query
-        fb_result = await db.execute(select(EmailMetadata).where(EmailMetadata.id == email_id))
-        email = fb_result.scalar_one_or_none()
+        raise HTTPException(status_code=404, detail="Email not found")
     if not email:
         raise HTTPException(status_code=404, detail="Email not found")
     return email
@@ -213,70 +212,100 @@ async def recent_emails(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Fetch recent Gmail messages (newer_than:{hours}h) and sync them into the local EmailMetadata table.
+    Fetch recent Gmail messages and sync them into the local EmailMetadata table.
     Returns the list of EmailMetadataResponse objects.
     """
     query = f"newer_than:{hours}h"
     try:
         search_result = await search_messages(user.id, query, None, db)
         messages = search_result.get("messages", [])
+
+        # If no messages in the last N hours, broaden the search to recent messages (newer_than:30d)
+        if not messages:
+            search_result = await search_messages(user.id, "newer_than:30d", None, db)
+            messages = search_result.get("messages", [])
+
         email_responses: list[EmailMetadataResponse] = []
-        for msg in messages:
+        for msg in messages[:25]:
             msg_id = msg.get("id")
             if not msg_id:
                 continue
-            full_msg = await fetch_message(user.id, msg_id, db)
-            headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
-            sender = headers.get("from", "")
-            subject = headers.get("subject", "")
-            internal_ts = int(full_msg.get("internalDate", "0")) // 1000
-            received_at = datetime.datetime.utcfromtimestamp(internal_ts)
-            existing = await db.scalar(
-                select(EmailMetadata).where(
-                    EmailMetadata.user_id == user.id,
-                    EmailMetadata.gmail_message_id == msg_id,
+            try:
+                full_msg = await fetch_message(user.id, msg_id, db)
+                headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                sender = headers.get("from", "")
+                subject = headers.get("subject", "")
+                internal_ts = int(full_msg.get("internalDate", "0")) // 1000
+                received_at = datetime.datetime.utcfromtimestamp(internal_ts)
+                existing = await db.scalar(
+                    select(EmailMetadata).where(
+                        EmailMetadata.user_id == user.id,
+                        EmailMetadata.gmail_message_id == msg_id,
+                    )
                 )
-            )
-            if not existing:
-                email = EmailMetadata(
-                    user_id=user.id,
-                    gmail_message_id=msg_id,
-                    sender=sender,
-                    subject=subject,
-                    summary=full_msg.get("snippet", ""),
-                    priority="Medium",
-                    category="General",
-                    urgency=False,
-                    reply_required=False,
-                    suspicious_flag=False,
-                    received_at=received_at,
-                )
-                db.add(email)
-                await db.flush()
-                email_id = email.id
-            else:
-                email_id = existing.id
+                if not existing:
+                    email = EmailMetadata(
+                        user_id=user.id,
+                        gmail_message_id=msg_id,
+                        sender=sender,
+                        subject=subject,
+                        summary=full_msg.get("snippet", ""),
+                        priority="Medium",
+                        category="General",
+                        urgency=False,
+                        reply_required=False,
+                        suspicious_flag=False,
+                        received_at=received_at,
+                    )
+                    db.add(email)
+                    await db.flush()
+                    email_id = email.id
+                else:
+                    email_id = existing.id
 
-            email_responses.append(
-                EmailMetadataResponse(
-                    id=email_id,
-                    user_id=str(user.id),
-                    gmail_message_id=msg_id,
-                    sender=sender,
-                    subject=subject,
-                    summary=full_msg.get("snippet", ""),
-                    priority="Medium",
-                    category="General",
-                    urgency=False,
-                    reply_required=False,
-                    suspicious_flag=False,
-                    received_at=received_at,
-                    thread_id=None,
-                    indexed_at=datetime.datetime.utcnow(),
+                email_responses.append(
+                    EmailMetadataResponse(
+                        id=email_id,
+                        user_id=str(user.id),
+                        gmail_message_id=msg_id,
+                        sender=sender,
+                        subject=subject,
+                        summary=full_msg.get("snippet", ""),
+                        priority="Medium",
+                        category="General",
+                        urgency=False,
+                        reply_required=False,
+                        suspicious_flag=False,
+                        received_at=received_at,
+                        thread_id=None,
+                        indexed_at=datetime.datetime.utcnow(),
+                    )
                 )
-            )
+            except Exception as msg_err:
+                logger.warning(f"Skipping message {msg_id} due to fetch error: {msg_err}")
+
         await db.commit()
+
+        # Fallback to local DB if no live responses were gathered
+        if not email_responses:
+            db_stmt = select(EmailMetadata).where(EmailMetadata.user_id == user.id).order_by(desc(EmailMetadata.received_at)).limit(25)
+            db_res = await db.execute(db_stmt)
+            db_items = db_res.scalars().all()
+            if not db_items:
+                fb_res = await db.execute(select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(25))
+                db_items = fb_res.scalars().all()
+            email_responses = [EmailMetadataResponse.from_orm(item) for item in db_items]
+
         return email_responses
     except Exception as e:
         logger.error(f"Failed to fetch recent emails for user {user.id}: {e}")
+        # Final fallback to DB items on error
+        try:
+            db_stmt = select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(25)
+            db_res = await db.execute(db_stmt)
+            db_items = db_res.scalars().all()
+            if db_items:
+                return [EmailMetadataResponse.from_orm(item) for item in db_items]
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail="Failed to retrieve recent emails")

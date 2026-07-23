@@ -94,11 +94,15 @@ async def classify_intent(
 
 
 def _default_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.1,
-        api_key=settings.OPENAI_API_KEY,
-    )
+    kwargs = {
+        "model": getattr(settings, "OPENAI_MODEL_CLASSIFIER", "openrouter/auto") if settings.openai_base_url else "gpt-4o-mini",
+        "temperature": 0.1,
+        "api_key": settings.OPENAI_API_KEY,
+    }
+    if settings.openai_base_url:
+        kwargs["base_url"] = settings.openai_base_url
+    return ChatOpenAI(**kwargs)
+
 
 
 def _summarize_context(context: dict[str, Any]) -> str:

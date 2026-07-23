@@ -83,16 +83,16 @@ export default function CommandCenter() {
       let responseText = "Task completed successfully.";
       
       // Extract matched items for the sidebar panel
-      const items: MatchedEmail[] = respObj.result?.items || [];
+      const items: MatchedEmail[] = respObj.result?.items || respObj.context_updates?.last_search_results || [];
       if (items && items.length > 0) {
         setQueryResults(items);
         setQueryTitle(`Command Results: "${currentInput}"`);
         setSelectedEmail(items[0]);
         responseText = `Retrieved ${items.length} email(s) for your request. View detailed cards in the Results Sidebar ➔`;
-      } else if (respObj.status === "clarification_needed") {
-        responseText = respObj.result?.clarification || "Could you please clarify your request?";
       } else if (respObj.result?.message) {
         responseText = respObj.result.message;
+      } else if (respObj.status === "clarification_needed") {
+        responseText = respObj.result?.clarification || "Could you please clarify your request?";
       } else if (respObj.result?.summary) {
         responseText = respObj.result.summary;
       } else if (respObj.result?.answer) {

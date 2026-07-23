@@ -44,7 +44,7 @@ export default function Dashboard() {
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (skipAutoSync = false) => {
     setLoading(true);
     try {
       const token = await getToken();
@@ -62,13 +62,23 @@ export default function Dashboard() {
         setSummary(summaryJson);
       }
 
-
       // 2. Fetch Real Inbox Emails from API
-      const emailsRes = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+      let emailsRes = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+      let emailsJson: RealEmail[] = [];
       if (emailsRes.ok) {
-        const emailsJson = await emailsRes.json();
-        setEmails(emailsJson);
+        emailsJson = await emailsRes.json();
       }
+
+      // 3. Auto-sync from Gmail if no emails found and not a manual refresh
+      if (emailsJson.length === 0 && !skipAutoSync) {
+        await fetch(`${API_URL}/inbox/recent?hours=24`, { headers });
+        emailsRes = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+        if (emailsRes.ok) {
+          emailsJson = await emailsRes.json();
+        }
+      }
+
+      setEmails(emailsJson);
     } catch (err) {
       console.error("Failed to fetch dashboard data:", err);
     } finally {
@@ -106,7 +116,7 @@ export default function Dashboard() {
           <Button
             variant="outline"
             size="sm"
-            onClick={fetchDashboardData}
+            onClick={() => fetchDashboardData(true)}
             disabled={loading}
             className="gap-1.5"
           >

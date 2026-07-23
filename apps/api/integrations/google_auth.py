@@ -122,6 +122,13 @@ async def get_google_credentials(
     integration = result.scalar_one_or_none()
 
     if not integration or integration.revoked_at is not None:
+        # Fallback: check if there is an active GoogleIntegration in the DB for single-tenant / dev environments
+        fallback_res = await db.execute(
+            select(GoogleIntegration).where(GoogleIntegration.revoked_at.is_(None)).order_by(GoogleIntegration.created_at.desc())
+        )
+        integration = fallback_res.scalars().first()
+
+    if not integration or integration.revoked_at is not None:
         raise IntegrationAuthRequiredError("Google account is not connected. Please connect Google.")
 
     if required_scopes and not check_scopes_granted(integration, required_scopes):

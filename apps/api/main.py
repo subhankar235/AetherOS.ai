@@ -150,17 +150,6 @@ async def health_check():
         db_status = f"unhealthy: {str(e)}"
         logger.error(f"Health Check: Database connection failed: {str(e)}")
 
-    # 2. Check Redis Connectivity
-    try:
-        import redis.asyncio as aioredis
-        
-        r = aioredis.from_url(settings.REDIS_URL, socket_timeout=2.0)
-        await asyncio.wait_for(r.ping(), timeout=2.0)
-        await r.close()
-    except Exception as e:
-        redis_status = f"unhealthy: {str(e)}"
-        logger.error(f"Health Check: Redis connection failed: {str(e)}")
-
     # 3. Check Qdrant Connectivity
     try:
         from qdrant_client import AsyncQdrantClient
@@ -193,7 +182,7 @@ async def health_check():
 # Mount Routers
 app.include_router(webhooks.router)
 
-from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings, replies
+from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings as settings_router, replies
 from websocket import router as websocket_router
 app.include_router(integrations.router)
 app.include_router(inbox.router)
@@ -205,7 +194,7 @@ app.include_router(calendar.router)
 app.include_router(research.router)
 app.include_router(playbooks.router)
 app.include_router(vip_contacts.router)
-app.include_router(settings.router)
+app.include_router(settings_router.router)
 app.include_router(replies.router)
 app.include_router(websocket_router)
 

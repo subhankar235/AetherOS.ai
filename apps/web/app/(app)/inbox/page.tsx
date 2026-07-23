@@ -34,7 +34,7 @@ export default function InboxPage() {
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  const fetchInbox = async () => {
+  const fetchInbox = async (skipAutoSync = false) => {
     setLoading(true);
     try {
       const token = await getToken();
@@ -45,11 +45,21 @@ export default function InboxPage() {
         headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
       }
 
-      const res = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+      let res = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+      let data: RealEmail[] = [];
       if (res.ok) {
-        const data = await res.json();
-        setEmails(data);
+        data = await res.json();
       }
+
+      if (data.length === 0 && !skipAutoSync) {
+        await fetch(`${API_URL}/inbox/recent?hours=24`, { headers });
+        res = await fetch(`${API_URL}/inbox/emails?limit=50`, { headers });
+        if (res.ok) {
+          data = await res.json();
+        }
+      }
+
+      setEmails(data);
     } catch (err) {
       console.error("Failed to fetch inbox:", err);
     } finally {
@@ -94,6 +104,7 @@ export default function InboxPage() {
         } else {
           setSidebarTitle(`Command: "${commandInput}" (No specific matches)`);
         }
+        await fetchInbox(true);
       }
     } catch (err) {
       console.error("AI Command failed:", err);
@@ -118,7 +129,7 @@ export default function InboxPage() {
               All fetched emails from your Gmail account
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={fetchInbox} disabled={loading} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => fetchInbox(true)} disabled={loading} className="gap-1.5">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>

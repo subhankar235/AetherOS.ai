@@ -241,25 +241,5 @@ async def _resolve_thread(db: AsyncSession, user_id: uuid.UUID, gmail_thread_id:
 
 
 async def _publish_dashboard_event(user_id: uuid.UUID, email: EmailMetadata) -> None:
-    try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(settings.REDIS_URL)
-        channel = f"dashboard:{user_id}"
-        event = {
-            "type": "email.new",
-            "email_id": str(email.id),
-            "gmail_message_id": email.gmail_message_id,
-            "sender": email.sender,
-            "subject": email.subject,
-            "priority": email.priority,
-            "category": email.category,
-            "urgency": email.urgency,
-            "reply_required": email.reply_required,
-            "suspicious_flag": email.suspicious_flag,
-        }
-        await r.publish(channel, json.dumps(event))
-        await r.close()
-        logger.debug(f"Published dashboard event to {channel}")
-    except Exception as exc:
-        logger.warning(f"Failed to publish dashboard event: {exc}")
+    # No‑op placeholder – Redis is not used in this deployment.
+    logger.debug(f"Dashboard event suppressed for user {user_id}, email {email.gmail_message_id}")

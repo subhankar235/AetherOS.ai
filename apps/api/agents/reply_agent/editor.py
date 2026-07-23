@@ -1,4 +1,3 @@
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -14,9 +13,6 @@ from models.draft import Draft
 from agents.supervisor.prompts import INJECTION_GUARDRAIL
 
 logger = logging.getLogger("agents.reply_agent.editor")
-
-REDIS_DRAFT_SESSION_PREFIX = "draft_session:"
-DRAFT_SESSION_TTL = 1800
 
 EDIT_SYSTEM_PROMPT = """You are an AI email reply editor. Your job is to rewrite the CURRENT draft according to the user's edit instructions.
 
@@ -94,8 +90,6 @@ async def edit_draft(
 
     logger.info(f"Edited draft {draft_id}: version {current_version}, instruction='{instructions[:60]}'")
 
-    _update_redis_session(draft_id, draft)
-
     return draft
 
 
@@ -104,23 +98,13 @@ async def get_draft_session(
     user_id: uuid.UUID,
     db: AsyncSession,
 ) -> Optional[Draft]:
-    try:
-        cached = _get_redis_session(draft_id)
-        if cached:
-            return cached
-    except Exception:
-        pass
-
     result = await db.execute(
         select(Draft).where(
             Draft.id == draft_id,
             Draft.user_id == user_id,
         )
     )
-    draft = result.scalar_one_or_none()
-    if draft:
-        _update_redis_session(draft_id, draft)
-    return draft
+    return result.scalar_one_or_none()
 
 
 async def discard_draft(
@@ -141,7 +125,6 @@ async def discard_draft(
     draft.status = "discarded"
     await db.commit()
 
-    _clear_redis_session(draft_id)
     logger.info(f"Discarded draft {draft_id}")
 
 
@@ -155,47 +138,3 @@ def _format_version_summary(version_history: list[dict[str, Any]]) -> str:
         src = v.get("source", "unknown")
         lines.append(f"- v{v.get('version', '?')} [{ts}] source={src}: '{str(instr)[:60]}'")
     return "\n".join(lines)
-
-
-def _update_redis_session(draft_id: uuid.UUID, draft: Draft) -> None:
-    try:
-        import redis as sync_redis
-
-        r = sync_redis.from_url(settings.REDIS_URL)
-        key = f"{REDIS_DRAFT_SESSION_PREFIX}{draft_id}"
-        r.setex(key, DRAFT_SESSION_TTL, json.dumps({
-            "id": str(draft.id),
-            "current_body": draft.current_body,
-            "version_count": len(draft.version_history or []),
-            "status": draft.status,
-        }))
-        r.close()
-    except Exception as exc:
-        logger.debug(f"Redis session cache update failed (non-critical): {exc}")
-
-
-def _get_redis_session(draft_id: uuid.UUID) -> Optional[Draft]:
-    try:
-        import redis as sync_redis
-
-        r = sync_redis.from_url(settings.REDIS_URL)
-        key = f"{REDIS_DRAFT_SESSION_PREFIX}{draft_id}"
-        data = r.get(key)
-        r.close()
-        if data:
-            return json.loads(data)
-    except Exception as exc:
-        logger.debug(f"Redis session cache read failed (non-critical): {exc}")
-    return None
-
-
-def _clear_redis_session(draft_id: uuid.UUID) -> None:
-    try:
-        import redis as sync_redis
-
-        r = sync_redis.from_url(settings.REDIS_URL)
-        key = f"{REDIS_DRAFT_SESSION_PREFIX}{draft_id}"
-        r.delete(key)
-        r.close()
-    except Exception as exc:
-        logger.debug(f"Redis session cache delete failed (non-critical): {exc}")

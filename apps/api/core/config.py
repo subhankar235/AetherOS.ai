@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     # DB & Redis
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_email_assistant"
     REDIS_URL: str = "redis://localhost:6379/0"
-    
+    CELERY_BROKER_URL: str = "memory://"
+    CELERY_RESULT_BACKEND: str = "cache+memory://"
+
     # Google OAuth
     GOOGLE_CLIENT_ID: str = "your_google_client_id.apps.googleusercontent.com"
     GOOGLE_CLIENT_SECRET: str = "your_google_client_secret"
@@ -29,11 +31,12 @@ class Settings(BaseSettings):
     token_encryption_key: str = Field("change_this_to_a_32_byte_key", alias="TOKEN_ENCRYPTION_KEY")
     RATE_LIMIT_GMAIL_PER_MIN: int = Field(60, alias="RATE_LIMIT_GMAIL_PER_MIN")
     RATE_LIMIT_CALENDAR_PER_MIN: int = Field(60, alias="RATE_LIMIT_CALENDAR_PER_MIN")
-    CELERY_BROKER_URL: str = Field("redis://localhost:6379/1", alias="CELERY_BROKER_URL")
-    CELERY_RESULT_BACKEND: str = Field("redis://localhost:6379/2", alias="CELERY_RESULT_BACKEND")
     
     # OpenAI & ElevenLabs
     OPENAI_API_KEY: str = "sk-xxxxxxxxxxxxxxxxxxxxx"
+    OPENAI_BASE_URL: Optional[str] = None
+    OPENAI_MODEL_PRIMARY: str = "openrouter/auto"
+    OPENAI_MODEL_CLASSIFIER: str = "openrouter/auto"
     ELEVENLABS_API_KEY: str = "sk_17c9803ed2daa90d1f648c98d93d21c5be8ffb63074beebb"
     ELEVENLABS_VOICE_ID: str = "OtEfb2LVzIE45wdYe54M"
     ELEVENLABS_STT_MODEL: str = "eleven-stt-v1"
@@ -41,7 +44,15 @@ class Settings(BaseSettings):
     ELEVENLABS_DEFAULT_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
     ELEVENLABS_DEFAULT_MODEL_ID: str = "eleven_flash_v2_5"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
-    
+
+    @property
+    def openai_base_url(self) -> Optional[str]:
+        if self.OPENAI_BASE_URL:
+            return self.OPENAI_BASE_URL
+        if self.OPENAI_API_KEY and self.OPENAI_API_KEY.startswith("sk-or-v1"):
+            return "https://openrouter.ai/api/v1"
+        return None
+
     # Qdrant Vector DB
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = ""

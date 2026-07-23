@@ -298,15 +298,22 @@ def _build_gmail_query(query: str) -> tuple[str, datetime.timedelta | None]:
     if any(k in lowered for k in ["recent", "past", "last", "latest", "unread"]):
         return "newer_than:7d", datetime.timedelta(days=7)
 
-    # 4. Sender / org / search terms e.g. "from Google" -> "from:Google"
-    clean_term = lowered.replace("show", "").replace("all", "").replace("emails", "").replace("email", "").replace("from", "").replace("get", "").replace("give", "").replace("me", "").replace("find", "").strip()
-    if clean_term:
-        return clean_term, None
+    # 4. Clean filler and stop words to extract pure search target (e.g., "give one email from devfolio" -> "devfolio")
+    stop_words = {"show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "one", "1", "a", "an", "any", "some", "the", "my", "to", "about", "for", "with", "of", "in"}
+    words = [w for w in lowered.replace("from:", "from ").split() if w not in stop_words and w != "from"]
+    target_term = " ".join(words).strip()
+
+    if "from" in lowered and target_term:
+        return f"from:{target_term}", None
+    if target_term:
+        return target_term, None
+    return "newer_than:30d", None
 
     return "newer_than:30d", None
 
 
 async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
     import datetime
     from db.session import AsyncSessionLocal
     from sqlalchemy import select, desc
@@ -326,68 +333,70 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
             if user_id_str:
                 uid = uuid.UUID(user_id_str)
 
-                # Check if this user has Google integration or find any active integration for local dev
+                # Check if this user has Google integration
                 g_res = await db.execute(select(GoogleIntegration).where(GoogleIntegration.user_id == uid, GoogleIntegration.revoked_at.is_(None)))
                 g_integration = g_res.scalar_one_or_none()
-                if not g_integration:
-                    any_g_res = await db.execute(select(GoogleIntegration).where(GoogleIntegration.revoked_at.is_(None)).limit(1))
-                    any_g = any_g_res.scalar_one_or_none()
-                    if any_g:
-                        uid = any_g.user_id
 
                 # Try live fetch from Gmail using parsed query
                 gmail_query, time_delta = _build_gmail_query(query)
                 try:
                     search_res = await search_messages(uid, gmail_query, None, db)
                     msgs = search_res.get("messages", [])
-                    for msg in msgs[:50]:
-                        msg_id = msg.get("id")
-                        if not msg_id:
-                            continue
-                        full_msg = await fetch_message(uid, msg_id, db)
-                        headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
-                        sender = headers.get("from", "")
-                        subject = headers.get("subject", "")
-                        internal_ts = int(full_msg.get("internalDate", "0")) // 1000
-                        received_at = datetime.datetime.utcfromtimestamp(internal_ts)
-
-                        existing = await db.scalar(
-                            select(EmailMetadata).where(
-                                EmailMetadata.user_id == uid,
-                                EmailMetadata.gmail_message_id == msg_id,
-                            )
+                    
+                    # Fetch top 15 messages in parallel using asyncio.gather for ultra-fast performance
+                    target_msgs = [m for m in msgs[:15] if m.get("id")]
+                    if target_msgs:
+                        fetch_results = await asyncio.gather(
+                            *[fetch_message(uid, m["id"], db) for m in target_msgs],
+                            return_exceptions=True
                         )
-                        if not existing:
-                            new_email = EmailMetadata(
-                                user_id=uid,
-                                gmail_message_id=msg_id,
-                                sender=sender,
-                                subject=subject,
-                                summary=full_msg.get("snippet", ""),
-                                priority="Medium",
-                                category="General",
-                                urgency=False,
-                                reply_required=False,
-                                suspicious_flag=False,
-                                received_at=received_at,
-                            )
-                            db.add(new_email)
-                            await db.flush()
-                            email_id = str(new_email.id)
-                        else:
-                            email_id = str(existing.id)
+                        for m, full_msg in zip(target_msgs, fetch_results):
+                            if isinstance(full_msg, Exception) or not isinstance(full_msg, dict):
+                                continue
+                            msg_id = m["id"]
+                            headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                            sender = headers.get("from", "")
+                            subject = headers.get("subject", "")
+                            internal_ts = int(full_msg.get("internalDate", "0")) // 1000
+                            received_at = datetime.datetime.utcfromtimestamp(internal_ts)
 
-                        items.append({
-                            "id": email_id,
-                            "gmail_message_id": msg_id,
-                            "subject": subject,
-                            "sender": sender,
-                            "summary": full_msg.get("snippet", ""),
-                            "priority": "Medium",
-                            "category": "General",
-                            "received_at": received_at.isoformat(),
-                        })
-                    await db.commit()
+                            existing = await db.scalar(
+                                select(EmailMetadata).where(
+                                    EmailMetadata.user_id == uid,
+                                    EmailMetadata.gmail_message_id == msg_id,
+                                )
+                            )
+                            if not existing:
+                                new_email = EmailMetadata(
+                                    user_id=uid,
+                                    gmail_message_id=msg_id,
+                                    sender=sender,
+                                    subject=subject,
+                                    summary=full_msg.get("snippet", ""),
+                                    priority="Medium",
+                                    category="General",
+                                    urgency=False,
+                                    reply_required=False,
+                                    suspicious_flag=False,
+                                    received_at=received_at,
+                                )
+                                db.add(new_email)
+                                await db.flush()
+                                email_id = str(new_email.id)
+                            else:
+                                email_id = str(existing.id)
+
+                            items.append({
+                                "id": email_id,
+                                "gmail_message_id": msg_id,
+                                "subject": subject,
+                                "sender": sender,
+                                "summary": full_msg.get("snippet", ""),
+                                "priority": "Medium",
+                                "category": "General",
+                                "received_at": received_at.isoformat(),
+                            })
+                        await db.commit()
                 except IntegrationAuthRequiredError:
                     logger.info(f"Google integration not connected for user {user_id_str}")
                     msg = "Google OAuth connection required. Please visit http://localhost:8000/integrations/google/connect in your browser to connect Google."
@@ -399,13 +408,15 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
                 # Fallback to local DB if live fetch produced no new items or wasn't connected
                 if not items:
-                    stmt = select(EmailMetadata)
+                    stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid)
                     if time_delta:
                         cutoff = datetime.datetime.now(datetime.timezone.utc) - time_delta
                         stmt = stmt.where(EmailMetadata.received_at >= cutoff)
                     elif query:
                         lowered_q = query.lower()
-                        clean_term = lowered_q.replace("show", "").replace("all", "").replace("emails", "").replace("email", "").replace("from", "").replace("get", "").replace("give", "").replace("me", "").replace("find", "").replace("recent", "").replace("last", "").strip()
+                        stop_words = {"show", "all", "emails", "email", "get", "give", "me", "find", "recent", "last", "one", "1", "a", "an", "any", "some", "the", "my", "to", "about", "for", "with", "of", "in", "from"}
+                        words = [w for w in lowered_q.split() if w not in stop_words]
+                        clean_term = " ".join(words).strip()
                         if clean_term and len(clean_term) > 1:
                             stmt = stmt.where(
                                 (EmailMetadata.sender.ilike(f"%{clean_term}%")) | 
@@ -416,9 +427,9 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     res = await db.execute(stmt)
                     emails = res.scalars().all()
 
-                    # Fallback to top recent emails if time_delta query produced 0 rows in DB
-                    if not emails and time_delta:
-                        res_fb = await db.execute(select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(10))
+                    # Fallback to top recent emails if query produced 0 rows for specific uid
+                    if not emails:
+                        res_fb = await db.execute(select(EmailMetadata).order_by(desc(EmailMetadata.received_at)).limit(25))
                         emails = res_fb.scalars().all()
 
                     for em in emails:
@@ -551,22 +562,22 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
 async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"Executing agent runner: {agent}/{action} with params={params}")
 
-    if agent == "knowledge_agent":
+    if agent in ("knowledge_agent", "knowledge"):
         return await run_knowledge_agent(action, params)
 
-    if agent == "inbox_agent":
+    if agent in ("inbox_agent", "inbox"):
         return await run_inbox_agent(action, params)
 
-    if agent == "reply_agent":
+    if agent in ("reply_agent", "reply"):
         return await run_reply_agent(action, params)
 
-    if agent == "calendar_agent":
+    if agent in ("calendar_agent", "calendar"):
         return await run_calendar_agent(action, params)
 
-    if agent == "research_agent":
+    if agent in ("research_agent", "research"):
         return await run_research_agent(action, params)
 
-    if agent == "support_agent":
+    if agent in ("support_agent", "support"):
         return await run_support_agent(action, params)
 
     return {
@@ -583,7 +594,7 @@ async def execute_tasks_node(state: SupervisorState) -> dict[str, Any]:
     enriched = []
     for t in raw_tasks:
         task = t if isinstance(t, dict) else {"agent": t.agent, "action": t.action, "params": t.params}
-        if task.get("agent") in ("knowledge_agent", "inbox_agent", "reply_agent", "calendar_agent", "research_agent", "support_agent"):
+        if task.get("agent") in ("knowledge_agent", "knowledge", "inbox_agent", "inbox", "reply_agent", "reply", "calendar_agent", "calendar", "research_agent", "research", "support_agent", "support"):
             task.setdefault("params", {})["_user_id"] = state.get("user_id", "")
             task.setdefault("params", {})["_org_id"] = "default_org"
             task.setdefault("params", {})["_access_level"] = "Member"
