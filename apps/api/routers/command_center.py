@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,36 @@ stt_client = SpeechToTextClient()
 tts_client = TextToSpeechClient()
 
 
+_IN_MEMORY_CONTEXTS: dict[str, dict] = {}
+
+
+async def _load_session_context(session_id: str) -> dict[str, Any]:
+    try:
+        import redis.asyncio as aioredis
+        from core.config import settings
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = await r.get(f"session_context:{session_id}")
+        await r.close()
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning(f"Redis context fetch skipped: {e}")
+
+    return _IN_MEMORY_CONTEXTS.get(session_id, get_default_context())
+
+
+async def _save_session_context(session_id: str, context: dict[str, Any]) -> None:
+    _IN_MEMORY_CONTEXTS[session_id] = context
+    try:
+        import redis.asyncio as aioredis
+        from core.config import settings
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        await r.set(f"session_context:{session_id}", json.dumps(context), ex=86400)
+        await r.close()
+    except Exception as e:
+        logger.warning(f"Redis context save skipped: {e}")
+
+
 @router.post("")
 async def text_command(
     command: str = Form(..., description="Natural language command text"),
@@ -31,7 +61,7 @@ async def text_command(
     db: AsyncSession = Depends(get_db),
 ):
     active_session = session_id or str(uuid.uuid4())
-    context = get_default_context()
+    context = await _load_session_context(active_session)
 
     try:
         response_data = await supervisor_graph.run(
@@ -41,6 +71,10 @@ async def text_command(
             input_mode="text",
             conversation_context=context,
         )
+
+        if isinstance(response_data, dict) and "conversation_context" in response_data:
+            await _save_session_context(active_session, response_data["conversation_context"])
+
         # Determine result type based on response content (simple heuristic)
         result_type = "default"
         if isinstance(response_data, dict):
