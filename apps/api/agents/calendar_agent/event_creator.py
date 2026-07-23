@@ -212,6 +212,28 @@ async def ensure_and_validate_approval(
     await require_valid_approval(db=db, approval_id=approval.id if approval else (approval_id or uuid.uuid4()), artifact_id=preview_id)
 
 
+def is_valid_sendable_email(email: str) -> bool:
+    if not email or "@" not in email:
+        return False
+    email = email.strip().lower()
+    invalid_domains = [
+        "clerk.user",
+        "example.com",
+        "example.org",
+        "example.net",
+        "test.com",
+        "localhost",
+        "invalid",
+        "local",
+    ]
+    domain = email.split("@")[-1]
+    if domain in invalid_domains:
+        return False
+    if email.startswith("user_") and "clerk" in email:
+        return False
+    return True
+
+
 async def confirm_event(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -260,11 +282,11 @@ async def confirm_event(
         user_email = user_obj.email if user_obj and user_obj.email else None
 
         raw_attendees = event_body.get("attendees", [])
-        attendee_emails = []
+        raw_emails = []
         for att in raw_attendees:
             email_str = att["email"] if isinstance(att, dict) and att.get("email") else str(att)
-            if "@" in email_str and email_str not in attendee_emails:
-                attendee_emails.append(email_str)
+            if is_valid_sendable_email(email_str) and email_str not in raw_emails:
+                raw_emails.append(email_str)
 
         if not source_email_id and preview_id:
             try:
@@ -281,30 +303,34 @@ async def confirm_event(
                 if em and em.sender:
                     s_raw = em.sender
                     s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
-                    if "@" in s_email and s_email not in attendee_emails:
-                        attendee_emails.append(s_email)
+                    if is_valid_sendable_email(s_email) and s_email not in raw_emails:
+                        raw_emails.append(s_email)
             except Exception:
                 pass
 
-        if user_email and "@" in user_email and user_email not in attendee_emails:
-            attendee_emails.append(user_email)
+        if user_email and is_valid_sendable_email(user_email) and user_email not in raw_emails:
+            raw_emails.append(user_email)
 
-        # Fallback: if still no attendee email with '@', fetch recent EmailMetadata sender for user
-        if not attendee_emails:
+        # Fallback: if still no valid sendable email, check recent real EmailMetadata sender
+        if not raw_emails:
             try:
-                recent_em = await db.scalar(
+                res_ems = await db.scalars(
                     select(EmailMetadata)
                     .where(EmailMetadata.user_id == user_id)
                     .order_by(EmailMetadata.received_at.desc())
-                    .limit(1)
+                    .limit(10)
                 )
-                if recent_em and recent_em.sender:
-                    s_raw = recent_em.sender
-                    s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
-                    if "@" in s_email:
-                        attendee_emails.append(s_email)
+                for em_cand in res_ems:
+                    if em_cand.sender:
+                        s_raw = em_cand.sender
+                        s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
+                        if is_valid_sendable_email(s_email) and s_email not in raw_emails:
+                            raw_emails.append(s_email)
+                            break
             except Exception:
                 pass
+
+        attendee_emails = raw_emails
 
         if attendee_emails:
             subject_title = event_body.get("summary", "Calendar Meeting")
