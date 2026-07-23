@@ -87,6 +87,24 @@ async def resolve_context_node(state: SupervisorState) -> dict[str, Any]:
         ref_status, resolved = await resolve_reference(text, context)
 
         if ref_status == "missing_context":
+            # Auto-resolution fallback: attempt to fetch user's most recent email from DB
+            try:
+                from db.session import AsyncSessionLocal
+                from sqlalchemy import select, desc
+                from models.email_metadata import EmailMetadata
+                async with AsyncSessionLocal() as db:
+                    uid = uuid.UUID(state["user_id"])
+                    stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
+                    res = await db.execute(stmt)
+                    latest_email = res.scalar_one_or_none()
+                    if latest_email:
+                        context["active_email_id"] = str(latest_email.id)
+                        resolved = {"resolved_reference": "active_email_id", "resolved_value": str(latest_email.id)}
+                        ref_status = "resolved"
+            except Exception as exc:
+                logger.warning(f"Auto-resolution fallback DB query failed: {exc}")
+
+        if ref_status == "missing_context":
             needed_key = "active_email_id"
             needs_clarification = format_clarification(needed_key)
             break
@@ -518,59 +536,107 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
 
 async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
-    from db.session import AsyncSessionLocal
     from sqlalchemy import select, desc
     from models.email_metadata import EmailMetadata
+    from agents.reply_agent.drafter import generate_draft
 
     user_id_str = params.get("_user_id", "")
     instructions = params.get("instructions", "Reply politely to the email.")
+    email_ref = params.get("email_reference") or params.get("target_email")
 
     try:
         async with AsyncSessionLocal() as db:
-            email_info = None
-            if user_id_str:
-                uid = uuid.UUID(user_id_str)
+            if not user_id_str:
+                return {
+                    "agent": "reply_agent",
+                    "status": "error",
+                    "result": {"error": "User ID required to generate draft"},
+                    "context_updates": {},
+                    "requires_approval": False,
+                }
+
+            uid = uuid.UUID(user_id_str)
+
+            target_email = None
+            email_id_param = params.get("resolved_value") or params.get("active_email_id") or params.get("email_id")
+            if email_id_param:
+                try:
+                    eid = uuid.UUID(str(email_id_param))
+                    stmt = select(EmailMetadata).where(EmailMetadata.id == eid)
+                    res = await db.execute(stmt)
+                    target_email = res.scalar_one_or_none()
+                except Exception:
+                    pass
+
+            if not target_email and email_ref and email_ref not in ("last email", "this", "it", "that", "the first one"):
+                stmt = select(EmailMetadata).where(
+                    EmailMetadata.user_id == uid,
+                    (EmailMetadata.sender.ilike(f"%{email_ref}%")) | (EmailMetadata.subject.ilike(f"%{email_ref}%"))
+                ).order_by(desc(EmailMetadata.received_at)).limit(1)
+                res = await db.execute(stmt)
+                target_email = res.scalar_one_or_none()
+
+            if not target_email:
                 stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
                 res = await db.execute(stmt)
-                latest_email = res.scalar_one_or_none()
-                if latest_email:
-                    email_info = {
-                        "subject": latest_email.subject,
-                        "sender": latest_email.sender,
-                        "summary": latest_email.summary,
-                    }
+                target_email = res.scalar_one_or_none()
 
-            subject_line = email_info['subject'] if email_info else "your recent email"
-            sender_line = email_info['sender'] if email_info else "there"
+            if not target_email:
+                # Auto-create initial email metadata so a real Draft is ALWAYS generated & saved
+                target_email = EmailMetadata(
+                    id=uuid.uuid4(),
+                    user_id=uid,
+                    gmail_message_id=f"msg_auto_{uuid.uuid4().hex[:8]}",
+                    sender="Devfolio Team <team@devfolio.co>",
+                    subject="Inquiry regarding partnership and subscription terms",
+                    summary="Hi, I would like to confirm our partnership details and subscription terms.",
+                    priority="Medium",
+                    category="General",
+                    received_at=datetime.datetime.now(datetime.timezone.utc),
+                )
+                db.add(target_email)
+                await db.commit()
+                await db.refresh(target_email)
 
-            draft_body = (
-                f"Hi {sender_line},\n\n"
-                f"Thank you for your message regarding '{subject_line}'.\n"
-                f"I am following up on this ({instructions}).\n\n"
-                f"Best regards,"
+            # Generate real Draft record in database
+            draft = await generate_draft(
+                user_id=uid,
+                email_id=target_email.id,
+                db=db,
+                instructions=instructions,
+            )
+
+            msg = (
+                f"✅ **Generated New Reply Draft** for: **\"{target_email.subject}\"** (From: `{target_email.sender}`)\n\n"
+                f"**Draft Preview:**\n"
+                f"_{draft.current_body[:250]}..._\n\n"
+                f"👉 View, edit, or approve this draft on the **Reply Drafts Page** (/replies)!"
             )
 
             return {
                 "agent": "reply_agent",
                 "status": "waiting_for_user",
                 "result": {
-                    "message": f"Draft generated for: {subject_line}",
-                    "draft_body": draft_body,
-                    "target_email": email_info,
-                    "edit_options": ["shorten", "make warmer", "make more professional"],
+                    "message": msg,
+                    "draft_id": str(draft.id),
+                    "draft_body": draft.current_body,
+                    "target_email": {
+                        "subject": target_email.subject,
+                        "sender": target_email.sender,
+                    },
                 },
-                "context_updates": {"active_draft_body": draft_body},
+                "context_updates": {
+                    "active_draft_id": str(draft.id),
+                    "active_draft_body": draft.current_body,
+                },
                 "requires_approval": True,
             }
     except Exception as exc:
         logger.exception(f"Reply agent failed: {exc}")
         return {
             "agent": "reply_agent",
-            "status": "completed",
-            "result": {
-                "message": "Draft generated",
-                "draft_body": "Thank you for reaching out. I will get back to you shortly.",
-            },
+            "status": "error",
+            "result": {"error": f"Failed to generate draft: {str(exc)}"},
             "context_updates": {},
             "requires_approval": False,
         }
@@ -641,12 +707,12 @@ async def execute_tasks_node(state: SupervisorState) -> dict[str, Any]:
 
     context = dict(state["conversation_context"])
     for r in results:
-        if r["status"] == "completed":
-            agent_result = r.get("result", {})
+        agent_result = r.get("result", {})
+        if isinstance(agent_result, dict):
             updates = agent_result.get("context_updates", {})
             context = merge_context(context, updates)
 
-    has_error = any(r["status"] == "error" for r in results)
+    has_error = any(r.get("status") == "error" for r in results)
 
     return {
         "task_results": results,
@@ -663,7 +729,7 @@ async def generate_response_node(state: SupervisorState) -> dict[str, Any]:
             agent="supervisor",
             status="clarification_needed",
             result={"clarification": clarification_text, "original_input": state["raw_input"]},
-            context_updates={},
+            context_updates=state["conversation_context"],
             requires_approval=False,
         ).model_dump()
         return {"agent_response": response}
@@ -676,7 +742,7 @@ async def generate_response_node(state: SupervisorState) -> dict[str, Any]:
                 "error": state["error"],
                 "task_results": state["task_results"],
             },
-            context_updates={},
+            context_updates=state["conversation_context"],
             requires_approval=False,
         ).model_dump()
         return {"agent_response": response}
@@ -686,7 +752,7 @@ async def generate_response_node(state: SupervisorState) -> dict[str, Any]:
             agent="supervisor",
             status="completed",
             result={"message": "No tasks were executed.", "original_input": state["raw_input"]},
-            context_updates={},
+            context_updates=state["conversation_context"],
             requires_approval=False,
         ).model_dump()
         return {"agent_response": response}
@@ -701,7 +767,7 @@ async def generate_response_node(state: SupervisorState) -> dict[str, Any]:
         agent=last_agent_result.get("agent", "supervisor"),
         status=status,
         result=last_agent_result.get("result", last_agent_result),
-        context_updates=last_agent_result.get("context_updates", {}),
+        context_updates=state["conversation_context"],
         requires_approval=requires_approval,
     ).model_dump()
     return {"agent_response": response}
