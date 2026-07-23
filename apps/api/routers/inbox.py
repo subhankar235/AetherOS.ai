@@ -48,6 +48,58 @@ async def gmail_webhook(request: Request):
     return {"status": "enqueued"}
 
 
+import asyncio
+
+async def sync_latest_gmail_messages(user_id: uuid.UUID, db: AsyncSession, max_fetch: int = 15):
+    try:
+        search_res = await search_messages(user_id, "newer_than:7d", None, db)
+        msgs = search_res.get("messages", [])
+        if not msgs:
+            return
+        msg_ids = [m["id"] for m in msgs[:max_fetch] if m.get("id")]
+        existing_res = await db.execute(
+            select(EmailMetadata.gmail_message_id).where(
+                EmailMetadata.user_id == user_id,
+                EmailMetadata.gmail_message_id.in_(msg_ids)
+            )
+        )
+        existing_ids = set(existing_res.scalars().all())
+        new_ids = [m_id for m_id in msg_ids if m_id not in existing_ids]
+        
+        if new_ids:
+            logger.info(f"Syncing {len(new_ids)} brand-new Gmail messages into DB for user {user_id}")
+            fetch_results = await asyncio.gather(
+                *[fetch_message(user_id, m_id, db) for m_id in new_ids],
+                return_exceptions=True
+            )
+            for m_id, full_msg in zip(new_ids, fetch_results):
+                if isinstance(full_msg, Exception) or not isinstance(full_msg, dict):
+                    continue
+                headers = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                sender = headers.get("from", "")
+                subject = headers.get("subject", "")
+                internal_ts = int(full_msg.get("internalDate", "0")) // 1000
+                received_at = datetime.datetime.utcfromtimestamp(internal_ts)
+                db.add(
+                    EmailMetadata(
+                        user_id=user_id,
+                        gmail_message_id=m_id,
+                        sender=sender,
+                        subject=subject,
+                        summary=full_msg.get("snippet", ""),
+                        priority="Medium",
+                        category="General",
+                        urgency=False,
+                        reply_required=False,
+                        suspicious_flag=False,
+                        received_at=received_at,
+                    )
+                )
+            await db.commit()
+    except Exception as exc:
+        logger.warning(f"On-demand Gmail sync skipped: {exc}")
+
+
 @router.get("/inbox/emails", response_model=list[EmailMetadataResponse])
 async def list_emails(
     priority: Optional[str] = Query(None, description="Filter by priority: High, Medium, Low"),
@@ -61,6 +113,9 @@ async def list_emails(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        # Sync brand-new emails on-demand
+        await sync_latest_gmail_messages(user.id, db)
+
         stmt = select(EmailMetadata).where(EmailMetadata.user_id == user.id)
 
         if priority:
@@ -215,8 +270,9 @@ async def recent_emails(
     Fetch recent Gmail messages and sync them into the local EmailMetadata table.
     Returns the list of EmailMetadataResponse objects.
     """
-    query = f"newer_than:{hours}h"
     try:
+        await sync_latest_gmail_messages(user.id, db)
+        query = f"newer_than:{hours}h"
         search_result = await search_messages(user.id, query, None, db)
         messages = search_result.get("messages", [])
 

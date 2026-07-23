@@ -70,6 +70,23 @@ async def classify_intent(
     context: dict[str, Any],
     llm: Optional[ChatOpenAI] = None,
 ) -> dict[str, Any]:
+    lowered = raw_input.lower().strip()
+    
+    # Ultra-fast path (0.1ms) for common email search patterns
+    email_kws = ["email", "emails", "inbox", "from", "unread", "recent", "past", "last", "hour", "day", "get", "give", "show", "find", "search"]
+    if any(kw in lowered for kw in email_kws):
+        if not any(kw in lowered for kw in ["reply", "draft", "schedule", "meeting", "calendar"]):
+            logger.info(f"Fast-path matched email search query: '{raw_input}'")
+            return {
+                "tasks": [{
+                    "agent": "inbox_agent",
+                    "action": "agent_search",
+                    "params": {"query": raw_input}
+                }],
+                "intent": "inbox_agent_search",
+                "clarification_text": None,
+            }
+
     if llm is None:
         llm = _default_llm()
 

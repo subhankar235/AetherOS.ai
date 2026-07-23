@@ -232,10 +232,10 @@ export default function CommandCenter() {
               </Badge>
             </div>
             
-            <p className="text-xs text-muted-foreground mb-3 font-medium">
-              <Badge variant="outline" className="text-[10px] ml-2">{resultType}</Badge>
-              {queryTitle}
-            </p>
+            <div className="text-xs text-muted-foreground mb-3 font-medium flex items-center gap-2">
+              <span>{queryTitle}</span>
+              <Badge variant="outline" className="text-[10px]">{resultType}</Badge>
+            </div>
 
             <div className="max-h-[480px] overflow-y-auto space-y-2 pr-1">
               {queryResults.map((item, idx) => (
