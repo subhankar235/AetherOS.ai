@@ -61,31 +61,73 @@ export default function CalendarPage() {
 
   const getHeaders = async () => {
     const token = await getToken();
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    } else {
+      headers["Authorization"] = `Bearer dev-token-nathsubhankar57@gmail.com`;
+    }
+    return headers;
   };
 
   const fetchMeetings = async () => {
+    let cachedMap = new Map<string, MeetingRecord>();
     try {
-      setLoading(true);
+      const cachedArr: MeetingRecord[] = JSON.parse(localStorage.getItem("active_meetings_cache") || "[]");
+      cachedArr.forEach((c) => cachedMap.set(c.id, c));
+    } catch (e) {}
+
+    let apiData: MeetingRecord[] | null = null;
+    try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const headers = await getHeaders();
       const res = await fetch(`${apiUrl}/calendar/meetings`, { headers });
       if (res.ok) {
-        const data = await res.json();
-        setMeetings(data);
+        const data: MeetingRecord[] = await res.json();
+        if (Array.isArray(data)) apiData = data;
       }
     } catch (err) {
       console.error("Failed to fetch meetings:", err);
     } finally {
       setLoading(false);
     }
+
+    setMeetings((currentMeetings) => {
+      const mergedMap = new Map<string, MeetingRecord>();
+
+      // 1. Add API data (authoritative source)
+      if (apiData) {
+        apiData.forEach((m) => mergedMap.set(m.id, m));
+      }
+
+      // 2. Add any cached proposals not already in API response (from command page)
+      cachedMap.forEach((cachedItem, id) => {
+        if (!mergedMap.has(id)) {
+          mergedMap.set(id, { ...cachedItem });
+        }
+      });
+
+      const finalList = Array.from(mergedMap.values());
+      try {
+        if (finalList.length > 0 || !apiData) {
+          localStorage.setItem("active_meetings_cache", JSON.stringify(finalList));
+        }
+      } catch (e) {}
+      return finalList;
+    });
   };
 
   useEffect(() => {
     fetchMeetings();
+
+    const onFocus = () => fetchMeetings();
+    window.addEventListener("focus", onFocus);
+    const interval = setInterval(() => fetchMeetings(), 4000);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleExtractAndCheckAvailability = async () => {

@@ -73,6 +73,23 @@ async def classify_intent(
 ) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
+    # Ultra-fast path (0.1ms) for calendar & scheduling intent
+    cal_kws = ["schedule", "meeting", "meet", "calendar", "book", "slot", "appointment"]
+    if any(kw in lowered for kw in cal_kws):
+        logger.info(f"Fast-path matched calendar scheduling query: '{raw_input}'")
+        return {
+            "tasks": [{
+                "agent": "calendar_agent",
+                "action": "schedule",
+                "params": {
+                    "raw_input": raw_input,
+                    "description": raw_input,
+                }
+            }],
+            "intent": "calendar_agent_schedule",
+            "clarification_text": None,
+        }
+
     # Ultra-fast path (0.1ms) for reply & draft intent
     reply_kws = ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"]
     if any(kw in lowered for kw in reply_kws):
@@ -91,9 +108,9 @@ async def classify_intent(
         }
 
     # Ultra-fast path (0.1ms) for common email search patterns
-    email_kws = ["email", "emails", "inbox", "from", "unread", "recent", "past", "last", "hour", "day", "get", "give", "show", "find", "search"]
+    email_kws = ["emails", "inbox", "unread", "recent", "past", "last", "hour", "day", "get", "give", "show", "find", "search"]
     if any(kw in lowered for kw in email_kws):
-        if not any(kw in lowered for kw in reply_kws):
+        if not any(kw in lowered for kw in reply_kws) and not any(kw in lowered for kw in cal_kws):
             logger.info(f"Fast-path matched email search query: '{raw_input}'")
             return {
                 "tasks": [{

@@ -82,11 +82,10 @@ async def text_command(
             if response_data.get("result", {}).get("items"):
                 result_type = "query"
         from fastapi.responses import JSONResponse
-        from fastapi import Response
-        return Response(content=JSONResponse(content={
-            "session_id": active_session,
-            "response": response_data,
-        }).body, media_type="application/json", headers={"X-Result-Type": result_type})
+        return JSONResponse(
+            content={"session_id": active_session, "response": response_data},
+            headers={"X-Result-Type": result_type},
+        )
     except Exception as e:
         logger.exception(f"Supervisor failed for command: {command[:80]}")
         raise HTTPException(status_code=500, detail=f"Command processing failed: {str(e)}")

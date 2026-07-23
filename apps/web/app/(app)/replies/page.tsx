@@ -46,60 +46,51 @@ export default function RepliesPage() {
       cachedArr.forEach((c) => cachedMap.set(c.id, c));
     } catch (e) {}
 
+    let apiData: DraftItem[] | null = null;
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const headers = await getHeaders();
       const res = await fetch(`${apiUrl}/replies/drafts`, { headers });
       if (res.ok) {
         const data: DraftItem[] = await res.json();
-        if (Array.isArray(data)) {
-          setDrafts((currentDrafts) => {
-            const currentMap = new Map<string, DraftItem>();
-            currentDrafts.forEach((d) => currentMap.set(d.id, d));
-
-            const updatedList: DraftItem[] = data.map((apiItem) => {
-              const existingLocal = currentMap.get(apiItem.id);
-              const cached = cachedMap.get(apiItem.id);
-              // Preserve local body if user is actively typing
-              let merged = { ...apiItem };
-              if (
-                existingLocal &&
-                existingLocal.body !== apiItem.body &&
-                isUserEditingRef.current.has(apiItem.id)
-              ) {
-                merged.body = existingLocal.body;
-              }
-              // Override API fallback dummy text with cache values
-              if (cached) {
-                if (merged.recipient === "Recipient" && cached.recipient) merged.recipient = cached.recipient;
-                if (merged.subject === "Reply Draft" && cached.subject) merged.subject = cached.subject;
-                if (merged.original_body === "Original Email Content" && cached.original_body) merged.original_body = cached.original_body;
-              }
-              return merged;
-            });
-
-            // Include any locally generated draft from command page not yet in DB response
-            cachedMap.forEach((cachedItem, id) => {
-              if (!updatedList.some((d) => d.id === id) && cachedItem.status === "drafting") {
-                updatedList.push(cachedItem);
-              }
-            });
-
-            try {
-              localStorage.setItem("active_drafts_cache", JSON.stringify(updatedList));
-            } catch (e) {}
-            return updatedList;
-          });
-          return;
-        }
+        if (Array.isArray(data)) apiData = data;
       }
     } catch (err) {
       console.error("Error fetching drafts from API:", err);
     }
 
-    // Fallback to cache if request fails
-    const cachedList = Array.from(cachedMap.values()).filter((d) => d.status === "drafting");
-    setDrafts(cachedList);
+    setDrafts((currentDrafts) => {
+      const mergedMap = new Map<string, DraftItem>();
+
+      // 1. Add API data (authoritative source)
+      if (apiData) {
+        apiData.forEach((apiItem) => {
+          const cached = cachedMap.get(apiItem.id);
+          let item = { ...apiItem };
+          if (cached) {
+            if (item.recipient === "Recipient" && cached.recipient) item.recipient = cached.recipient;
+            if (item.subject === "Reply Draft" && cached.subject) item.subject = cached.subject;
+            if (item.original_body === "Original Email Content" && cached.original_body) item.original_body = cached.original_body;
+          }
+          mergedMap.set(apiItem.id, item);
+        });
+      }
+
+      // 2. Add any cached drafts not already in API response (from command page)
+      cachedMap.forEach((cachedItem, id) => {
+        if (!mergedMap.has(id) && cachedItem.status === "drafting") {
+          mergedMap.set(id, { ...cachedItem });
+        }
+      });
+
+      const finalList = Array.from(mergedMap.values());
+      try {
+        if (finalList.length > 0 || !apiData) {
+          localStorage.setItem("active_drafts_cache", JSON.stringify(finalList));
+        }
+      } catch (e) {}
+      return finalList;
+    });
   };
 
   useEffect(() => {

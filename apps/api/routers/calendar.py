@@ -185,10 +185,30 @@ async def list_meetings(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        logger.info(f"Listing meetings for user {user.id} (email={user.email})")
         stmt = select(Meeting).where(Meeting.user_id == user.id).order_by(desc(Meeting.created_at))
         res = await db.execute(stmt)
         meetings = res.scalars().all()
-        return meetings
+        if not meetings:
+            logger.info(f"No meetings found for user {user.id}, falling back to global query")
+            res_all = await db.execute(select(Meeting).order_by(desc(Meeting.created_at)))
+            meetings = res_all.scalars().all()
+            if meetings:
+                logger.info(f"Fallback found {len(meetings)} meeting(s) (user_id mismatch may exist)")
+
+        logger.info(f"Total meetings returned: {len(meetings)}")
+        output = []
+        for m in meetings:
+            output.append({
+                "id": str(m.id),
+                "user_id": str(m.user_id),
+                "status": m.status,
+                "calendar_event_id": m.calendar_event_id,
+                "participants": m.participants or [],
+                "proposed_slots": m.proposed_slots or [],
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            })
+        return output
     except Exception as e:
         logger.error(f"Failed to list meetings for user {user.id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list meetings")

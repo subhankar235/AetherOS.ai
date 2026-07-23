@@ -70,6 +70,69 @@ async def test_generate_draft_with_gaps_flag(mock_chat_class, mock_fetch):
     assert "Gaps detected" in draft.current_body
     assert len(draft.version_history) == 1
     assert draft.version_history[0]["has_gaps"] is True
+    assert getattr(draft, "has_gaps", False) is True
+    assert getattr(draft, "gap_notes", []) == ["I don't have our current refund window — please confirm"]
+
+
+@pytest.mark.asyncio
+@patch("agents.knowledge_agent.retriever.query_knowledge", new_callable=AsyncMock)
+@patch("agents.reply_agent.drafter.fetch_message", new_callable=AsyncMock)
+@patch("agents.reply_agent.drafter.ChatOpenAI")
+async def test_generate_draft_grounding_and_kb_query(mock_chat_class, mock_fetch, mock_query_kb):
+    user_id = uuid.uuid4()
+    email_id = uuid.uuid4()
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+
+    email_meta = EmailMetadata(
+        id=email_id,
+        user_id=user_id,
+        gmail_message_id="msg_kb_999",
+        subject="Pricing Inquiry for Enterprise Tier",
+        sender="enterprise@client.com",
+    )
+    mock_execute_result = MagicMock()
+    mock_execute_result.scalar_one_or_none.return_value = email_meta
+    mock_db.execute.return_value = mock_execute_result
+
+    mock_fetch.return_value = {
+        "id": "msg_kb_999",
+        "threadId": "thread_kb_999",
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": "Pricing Inquiry for Enterprise Tier"},
+                {"name": "From", "value": "enterprise@client.com"},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": "SGkgd2hhdCBpcyB0aGUgZW50ZXJwcmlzZSBwcmljaW5nPw=="},
+        },
+    }
+
+    mock_query_kb.return_value = {
+        "agent": "knowledge_agent",
+        "status": "completed",
+        "result": {"answer": "Enterprise tier costs $500/mo billed annually."},
+    }
+
+    mock_llm = MagicMock()
+    mock_structured_llm = AsyncMock()
+    mock_structured_llm.ainvoke.return_value = DraftOutput(
+        body="Hi Enterprise Client, our Enterprise tier is $500/mo billed annually.",
+        has_gaps=False,
+        gap_notes=[],
+    )
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+    mock_chat_class.return_value = mock_llm
+
+    draft = await generate_draft(user_id=user_id, email_id=email_id, db=mock_db)
+
+    assert draft is not None
+    assert "Enterprise tier is $500/mo" in draft.current_body
+    assert getattr(draft, "has_gaps", True) is False
+    assert getattr(draft, "gap_notes", ["dummy"]) == []
+    mock_query_kb.assert_called_once()
+
 
 
 # ==========================================

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { type CommandTranscript } from "@/lib/mock-data";
 import Link from "next/link";
-import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2 } from "lucide-react";
+import { Mic, MicOff, Send, Sparkles, Volume2, Mail, Clock, ShieldAlert, FileText, ChevronRight, CheckCircle2, AlertTriangle, Trash2, RefreshCw } from "lucide-react";
 
 interface MatchedEmail {
   id?: string;
@@ -19,6 +19,16 @@ interface MatchedEmail {
   priority?: string;
   category?: string;
   received_at?: string;
+}
+
+interface ActiveDraftInfo {
+  draft_id: string;
+  draft_body: string;
+  has_gaps?: boolean;
+  gap_notes?: string[];
+  recipient?: string;
+  subject?: string;
+  created_at?: string;
 }
 
 export default function CommandCenter() {
@@ -37,6 +47,9 @@ export default function CommandCenter() {
   const [queryTitle, setQueryTitle] = useState<string>("");
   const [selectedEmail, setSelectedEmail] = useState<MatchedEmail | null>(null);
 
+  // Dedicated sidebar active draft result state
+  const [activeDraft, setActiveDraft] = useState<ActiveDraftInfo | null>(null);
+
   const getHeaders = async () => {
     const token = await getToken();
     const headers: Record<string, string> = {};
@@ -47,6 +60,36 @@ export default function CommandCenter() {
     }
     return headers;
   };
+
+  // Fetch real active AI drafts from backend on page load
+  const loadLatestBackendDraft = async () => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
+      const res = await fetch(`${apiUrl}/replies/drafts`, { headers });
+      if (res.ok) {
+        const drafts = await res.json();
+        if (Array.isArray(drafts) && drafts.length > 0) {
+          const latest = drafts[0];
+          setActiveDraft({
+            draft_id: latest.id || latest.draft_id,
+            draft_body: latest.body || latest.current_body,
+            has_gaps: latest.has_gaps || false,
+            gap_notes: latest.gap_notes || [],
+            recipient: latest.recipient || "Recipient",
+            subject: latest.subject || "Reply Draft",
+            created_at: latest.created_at,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load initial backend draft:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadLatestBackendDraft();
+  }, []);
 
   const handleInstantApproveAndSend = async (draftId: string, bodyText: string) => {
     try {
@@ -74,6 +117,9 @@ export default function CommandCenter() {
           localStorage.setItem("active_drafts_cache", JSON.stringify(updated));
         } catch (e) {}
         alert("✅ Draft approved and sent successfully via Gmail API!");
+        if (activeDraft?.draft_id === draftId) {
+          setActiveDraft(null);
+        }
       } else {
         const errTxt = await sendRes.text();
         alert(`Failed to send email: ${errTxt}`);
@@ -146,23 +192,61 @@ export default function CommandCenter() {
 
       const draftId = respObj.result?.draft_id || respObj.context_updates?.active_draft_id;
       const draftBody = respObj.result?.draft_body || respObj.context_updates?.active_draft_body;
+      const hasGaps = respObj.result?.has_gaps ?? respObj.context_updates?.has_gaps ?? false;
+      const gapNotes = respObj.result?.gap_notes ?? respObj.context_updates?.gap_notes ?? [];
+      const recipient = respObj.result?.target_email?.sender || items[0]?.sender || "Recipient";
+      const subject = respObj.result?.target_email?.subject || items[0]?.subject || "Reply Draft";
 
       if (draftId && draftBody) {
+        const draftObj: ActiveDraftInfo = {
+          draft_id: draftId,
+          draft_body: draftBody,
+          has_gaps: hasGaps,
+          gap_notes: gapNotes,
+          recipient: recipient,
+          subject: subject,
+        };
+        setActiveDraft(draftObj);
+
         try {
           const newDraftObj = {
             id: draftId,
             body: draftBody,
             status: "drafting",
             created_at: new Date().toISOString(),
-            recipient: respObj.result?.target_email?.sender || items[0]?.sender || "Recipient",
-            subject: respObj.result?.target_email?.subject || items[0]?.subject || "Reply Draft",
+            recipient: recipient,
+            subject: subject,
             original_body: respObj.result?.target_email?.summary || items[0]?.summary || "",
+            has_gaps: hasGaps,
+            gap_notes: gapNotes,
           };
           const existing = JSON.parse(localStorage.getItem("active_drafts_cache") || "[]");
           const updated = [newDraftObj, ...existing.filter((d: any) => d.id !== draftId)];
           localStorage.setItem("active_drafts_cache", JSON.stringify(updated));
         } catch (err) {
           console.warn("Error saving to active_drafts_cache:", err);
+        }
+      }
+
+      const previewId = respObj.result?.preview_id || respObj.context_updates?.active_calendar_preview_id;
+      const meetingStart = respObj.result?.start;
+      const meetingEnd = respObj.result?.end;
+      const meetingTitle = respObj.result?.title || "Meeting Proposal";
+
+      if (previewId && meetingStart && meetingEnd) {
+        try {
+          const newMeetingObj = {
+            id: previewId,
+            status: "previewed",
+            participants: (respObj.result?.participants || []).map((p: string) => ({ email: p })),
+            proposed_slots: [{ start: meetingStart, end: meetingEnd, title: meetingTitle }],
+            created_at: new Date().toISOString(),
+          };
+          const existingM = JSON.parse(localStorage.getItem("active_meetings_cache") || "[]");
+          const updatedM = [newMeetingObj, ...existingM.filter((m: any) => m.id !== previewId)];
+          localStorage.setItem("active_meetings_cache", JSON.stringify(updatedM));
+        } catch (err) {
+          console.warn("Error saving to active_meetings_cache:", err);
         }
       }
 
@@ -300,13 +384,34 @@ export default function CommandCenter() {
                     </div>
                   </div>
                 )}
+
+                {/* DIRECT ACTION CARD FOR CALENDAR PROPOSAL */}
+                {(m.agentUsed === "calendar_agent" || m.content.includes("Calendar Proposal") || m.content.includes("Proposed Slot")) && m.role === "assistant" && (
+                  <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3.5 space-y-2.5 shadow-sm text-xs">
+                    <div className="flex items-center justify-between font-semibold">
+                      <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                        <Sparkles className="h-4 w-4" /> Calendar Meeting Proposal Generated
+                      </span>
+                      <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-500">
+                        Awaiting Approval
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Link href="/calendar">
+                        <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700 font-semibold text-xs gap-1.5">
+                          View & Approve in Calendar Page (/calendar) <ChevronRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
           <div className="mt-3 flex gap-2">
             <Input
-              placeholder="Type a command e.g. 'give me last 4 hour email' or 'show emails from Microsoft'"
+              placeholder="Type a command e.g. 'draft reply to Devfolio' or 'give me last 4 hour email'"
               value={input}
               disabled={loading}
               onChange={(e) => setInput(e.target.value)}
@@ -319,8 +424,88 @@ export default function CommandCenter() {
         </Card>
       </div>
 
-      {/* Right Sidebar — Dynamic Command Results Panel */}
+      {/* Right Sidebar — Dynamic Command Results & Active Draft Side Window */}
       <div className="space-y-4">
+        {/* DEDICATED AI DRAFT SIDE WINDOW CARD */}
+        {activeDraft && (
+          <Card className="p-4 border-primary/60 bg-card shadow-xl space-y-3">
+            <div className="flex items-center justify-between border-b pb-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-primary uppercase tracking-wider">
+                  AI Reply Draft Window
+                </span>
+              </div>
+              <Badge variant="outline" className="text-[10px] border-amber-500/50 text-amber-600 dark:text-amber-400">
+                Awaiting Approval
+              </Badge>
+            </div>
+
+            <div className="space-y-1 text-xs">
+              <div>
+                <span className="font-semibold text-muted-foreground">To:</span>{" "}
+                <span className="font-medium text-foreground">{activeDraft.recipient || "Recipient"}</span>
+              </div>
+              <div>
+                <span className="font-semibold text-muted-foreground">Subject:</span>{" "}
+                <span className="font-medium text-foreground">{activeDraft.subject || "Reply Draft"}</span>
+              </div>
+            </div>
+
+            {/* GAP DETECTION WARNING BANNER */}
+            {activeDraft.has_gaps && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                  <span>Knowledge Base Gap Flagged</span>
+                </div>
+                {activeDraft.gap_notes && activeDraft.gap_notes.length > 0 ? (
+                  <ul className="list-disc list-inside text-[11px] space-y-0.5 opacity-90">
+                    {activeDraft.gap_notes.map((g, idx) => (
+                      <li key={idx}>{g}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-[11px] opacity-90">Missing unverified facts flagged in draft text.</p>
+                )}
+              </div>
+            )}
+
+            {/* DRAFT BODY PREVIEW WINDOW */}
+            <div className="rounded-lg border bg-muted/40 p-3 text-xs font-sans whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed border-border/80">
+              {activeDraft.draft_body}
+            </div>
+
+            {/* ACTION BAR */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold gap-1.5 flex-1"
+                onClick={() => handleInstantApproveAndSend(activeDraft.draft_id, activeDraft.draft_body)}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" /> Approve & Send Now
+              </Button>
+
+              <Link href="/replies">
+                <Button size="sm" variant="outline" className="text-xs gap-1">
+                  <FileText className="h-3.5 w-3.5" /> /replies
+                </Button>
+              </Link>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs text-muted-foreground hover:text-destructive p-2"
+                onClick={() => setActiveDraft(null)}
+                title="Close Side Window"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {/* SEARCH / QUERY RESULTS SIDEBAR PANEL */}
         {queryResults.length > 0 ? (
           <Card className="p-4 border-primary/40 shadow-lg">
             <div className="flex items-center justify-between border-b pb-2 mb-3">
@@ -389,36 +574,38 @@ export default function CommandCenter() {
             )}
           </Card>
         ) : (
-          <>
-            <Card className="p-4">
-              <div className="text-xs font-medium text-muted-foreground">COMMAND RESULTS PANEL</div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                When you issue an email query command (e.g. <em>"give me last 4 hour email"</em>), the matched email cards will render cleanly right here in this sidebar!
-              </p>
-            </Card>
+          !activeDraft && (
+            <>
+              <Card className="p-4">
+                <div className="text-xs font-medium text-muted-foreground">COMMAND RESULTS PANEL</div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  When you issue an email query command or request a reply draft, the results and interactive AI draft card will render right here in this side window!
+                </p>
+              </Card>
 
-            <Card className="p-4">
-              <div className="text-xs font-medium text-muted-foreground">TRY THESE COMMANDS</div>
-              <div className="mt-3 flex flex-col gap-1.5 text-sm">
-                {[
-                  "give me last 4 hour email",
-                  "show emails from Google",
-                  "give me 10 emails",
-                  "find emails about Microsoft",
-                  "show recent newsletter emails",
-                ].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setInput(s)}
-                    className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-left text-xs hover:bg-sidebar-accent hover:border-primary/50 transition-all"
-                  >
-                    <span>{s}</span>
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
-                ))}
-              </div>
-            </Card>
-          </>
+              <Card className="p-4">
+                <div className="text-xs font-medium text-muted-foreground">TRY THESE COMMANDS</div>
+                <div className="mt-3 flex flex-col gap-1.5 text-sm">
+                  {[
+                    "draft reply to Devfolio inquiry",
+                    "give me last 4 hour email",
+                    "show emails from Google",
+                    "give me 10 emails",
+                    "find emails about Microsoft",
+                  ].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInput(s)}
+                      className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-left text-xs hover:bg-sidebar-accent hover:border-primary/50 transition-all"
+                    >
+                      <span>{s}</span>
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            </>
+          )
         )}
       </div>
     </div>

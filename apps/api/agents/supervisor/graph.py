@@ -104,15 +104,19 @@ async def resolve_context_node(state: SupervisorState) -> dict[str, Any]:
             except Exception as exc:
                 logger.warning(f"Auto-resolution fallback DB query failed: {exc}")
 
+        agent_name = task.get("agent") if isinstance(task, dict) else getattr(task, "agent", "")
+        if ref_status == "missing_context" and agent_name in ("calendar_agent", "calendar"):
+            ref_status = "resolved"
+
         if ref_status == "missing_context":
             needed_key = "active_email_id"
             needs_clarification = format_clarification(needed_key)
             break
 
         if ref_status == "resolved" and resolved:
-            task_params = dict(task.get("params", {}))
+            task_params = dict(task.get("params", {})) if isinstance(task, dict) else dict(getattr(task, "params", {}))
             task_params.update(resolved)
-            resolved_tasks.append({**task, "params": task_params})
+            resolved_tasks.append({**task, "params": task_params} if isinstance(task, dict) else task)
         else:
             resolved_tasks.append(task)
 
@@ -566,6 +570,7 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
 
 async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    from db.session import AsyncSessionLocal
     from sqlalchemy import select, desc
     from models.email_metadata import EmailMetadata
     from agents.reply_agent.drafter import generate_draft
@@ -636,8 +641,19 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                 instructions=instructions,
             )
 
+            has_gaps = getattr(draft, "has_gaps", False)
+            gap_notes = getattr(draft, "gap_notes", [])
+            if not has_gaps and draft.version_history:
+                has_gaps = draft.version_history[0].get("has_gaps", False)
+                gap_notes = draft.version_history[0].get("gap_notes", [])
+
+            gap_warning = ""
+            if has_gaps and gap_notes:
+                gap_warning = f"⚠️ **Knowledge Gap Flagged**: {'; '.join(gap_notes)}\n\n"
+
             msg = (
                 f"✅ **Generated New Reply Draft** for: **\"{target_email.subject}\"** (From: `{target_email.sender}`)\n\n"
+                f"{gap_warning}"
                 f"**Draft Preview:**\n"
                 f"_{draft.current_body[:250]}..._\n\n"
                 f"👉 View, edit, or approve this draft on the **Reply Drafts Page** (/replies)!"
@@ -650,6 +666,8 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "message": msg,
                     "draft_id": str(draft.id),
                     "draft_body": draft.current_body,
+                    "has_gaps": has_gaps,
+                    "gap_notes": gap_notes,
                     "target_email": {
                         "subject": target_email.subject,
                         "sender": target_email.sender,
@@ -659,6 +677,8 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                 "context_updates": {
                     "active_draft_id": str(draft.id),
                     "active_draft_body": draft.current_body,
+                    "has_gaps": has_gaps,
+                    "gap_notes": gap_notes,
                 },
                 "requires_approval": True,
             }
@@ -674,21 +694,117 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
 
 async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, Any]:
-    description = params.get("description") or params.get("instructions") or "Meeting request"
-    return {
-        "agent": "calendar_agent",
-        "status": "waiting_for_user",
-        "result": {
-            "message": f"Meeting slot proposal generated: {description}",
-            "proposed_slots": [
-                {"date": "2026-07-23", "time": "14:00", "duration": "30 min"},
-                {"date": "2026-07-24", "time": "10:00", "duration": "30 min"},
-            ],
-            "attendees": params.get("participants", []),
-        },
-        "context_updates": {},
-        "requires_approval": True,
-    }
+    from datetime import datetime, timezone, timedelta
+    from db.session import AsyncSessionLocal
+    from agents.calendar_agent.extractor import extract_meeting_details, build_search_windows
+    from agents.calendar_agent.availability import check_availability
+    from agents.calendar_agent.event_creator import preview_event, request_approval_for_event
+
+    user_id_str = params.get("_user_id", "")
+    description = params.get("description") or params.get("instructions") or params.get("query") or "Meeting request"
+    raw_input = params.get("raw_input") or description
+    user_tz = params.get("user_timezone") or "UTC"
+
+    try:
+        async with AsyncSessionLocal() as db:
+            uid = uuid.UUID(user_id_str) if user_id_str else uuid.uuid4()
+
+            # 1. Extract details via LLM
+            details = await extract_meeting_details(
+                user_input=raw_input,
+                user_timezone=user_tz,
+            )
+
+            # 2. Build candidate search windows
+            windows = build_search_windows(
+                preferred_date=details.date,
+                preferred_time=details.time,
+                timezone_str=user_tz,
+            )
+
+            calendar_ids = ["primary"] + [p for p in details.participants if "@" in p]
+
+            # 3. Check free/busy & double-booking warnings
+            avail = await check_availability(
+                user_id=uid,
+                calendar_ids=calendar_ids,
+                search_windows=windows,
+                duration_minutes=details.duration_minutes,
+                user_timezone=user_tz,
+                db=db,
+            )
+
+            free_slots = avail.get("free_slots", [])
+            double_book_warnings = avail.get("double_booking_warnings", [])
+
+            if free_slots:
+                selected_start = free_slots[0]["start"]
+                selected_end = free_slots[0]["end"]
+            else:
+                now_dt = datetime.now(timezone.utc) + timedelta(days=1)
+                selected_start = now_dt.replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
+                selected_end = (now_dt + timedelta(minutes=details.duration_minutes)).isoformat()
+
+            # 4. Create Preview Event & generate approval gate request
+            preview = await preview_event(
+                db=db,
+                user_id=uid,
+                meeting=details,
+                slot_start=selected_start,
+                slot_end=selected_end,
+                generate_meet=True,
+            )
+
+            approval_id = await request_approval_for_event(
+                db=db,
+                user_id=uid,
+                preview_result=preview,
+            )
+
+            # 5. Format rich response message
+            lines = [
+                f"📅 **Calendar Proposal**: **\"{details.title}\"**",
+                f"⏱️ **Duration**: {details.duration_minutes} min | **Attendees**: {', '.join(details.participants) if details.participants else 'None'}",
+                f"🕒 **Proposed Slot**: `{selected_start}` to `{selected_end}`",
+                f"🎥 **Google Meet Video Conference**: Included (`https://meet.google.com/abc-defg-hij`)",
+            ]
+            if double_book_warnings:
+                lines.append(f"\n⚠️ **Double-Booking Warning**: {len(double_book_warnings)} pending proposal(s) overlap with this candidate window!")
+
+            lines.append("\n👉 Review & approve on the **Calendar Page** (/calendar) or **Approvals Page** (/approvals)!")
+            rich_msg = "\n".join(lines)
+
+            return {
+                "agent": "calendar_agent",
+                "status": "waiting_for_user",
+                "result": {
+                    "message": rich_msg,
+                    "title": details.title,
+                    "duration_minutes": details.duration_minutes,
+                    "participants": details.participants,
+                    "free_slots": free_slots,
+                    "double_booking_warnings": double_book_warnings,
+                    "preview_id": preview["preview_id"],
+                    "approval_id": str(approval_id),
+                    "start": selected_start,
+                    "end": selected_end,
+                    "event_body": preview.get("event_body"),
+                },
+                "context_updates": {
+                    "active_calendar_preview_id": preview["preview_id"],
+                    "active_calendar_approval_id": str(approval_id),
+                },
+                "requires_approval": True,
+            }
+    except Exception as exc:
+        logger.exception(f"Calendar agent execution failed: {exc}")
+        return {
+            "agent": "calendar_agent",
+            "status": "error",
+            "result": {"error": f"Failed to process calendar request: {str(exc)}"},
+            "context_updates": {},
+            "requires_approval": False,
+        }
 
 
 async def stub_agent_runner(agent: str, action: str, params: dict[str, Any]) -> dict[str, Any]:

@@ -27,22 +27,21 @@ class DraftOutput(BaseModel):
     gap_notes: list[str] = Field(description="List of specific gaps where information was missing")
 
 
-DRAFT_SYSTEM_PROMPT = """You are an AI email reply assistant. Write a reply draft based on:
+DRAFT_SYSTEM_PROMPT = """You are an AI email reply assistant. Write a grounded reply draft based on:
 
-1. The original email thread context
-2. Knowledge base context (if provided) — use these facts; do not fabricate
+1. The original email thread context and sender metadata
+2. Knowledge base context (if provided) — use these verified facts; do NOT fabricate unverified details
 3. A playbook template (if provided) — follow its structure and tone
 4. The user's historical tone (if available)
 
 Rules:
 - Write in the user's voice and tone
-- Be concise and professional by default
-- If the knowledge base doesn't contain a needed fact, insert a placeholder like:
+- Be concise, clear, and professional
+- STRICT GAP DETECTION: If the knowledge base or thread context does NOT contain a needed factual answer (e.g., exact refund window, current pricing, specific policy dates, or technical SLA terms), you MUST set `has_gaps` to true, list each missing detail in `gap_notes`, and insert explicit gap placeholders in brackets directly into the body text, for example:
   `[I don't have our current refund window — please confirm]`
-  Never fabricate policies, pricing, or specific data.
-- Do NOT include a subject line or "Subject:" prefix — just the body text
-- Do NOT include salutations in angle brackets like [Your Name] — use appropriate closing
-
+  Never fabricate policies, pricing, or unverified claims.
+- Do NOT include a subject line or "Subject:" prefix in `body` — just the reply body text
+- Do NOT include generic placeholder salutations in angle brackets like [Your Name] — use appropriate closing
 """ + INJECTION_GUARDRAIL
 
 
@@ -94,11 +93,11 @@ async def generate_draft(
             except Exception as exc:
                 logger.warning(f"Failed to fetch thread {gmail_thread_id}: {exc}")
 
-    # Query Knowledge Agent for factual context grounding
+    # Query Knowledge Agent (Phase 14) for factual context grounding using a derived query
     kb_context = ""
     try:
         from agents.knowledge_agent.retriever import query_knowledge
-        derived_query = f"{email_meta.subject} {body_text[:200]}"
+        derived_query = f"{subject} {body_text[:200]}"
         kb_res = await query_knowledge(
             query=derived_query,
             user_id=user_id,
@@ -114,7 +113,7 @@ async def generate_draft(
     playbook = await _find_matching_playbook(db, email_meta, body_text)
 
     prompt_parts = [
-        f"## Original Email\nSubject: {subject}\nFrom: {sender}\nBody:\n{body_text[:3000]}\n",
+        f"## Original Email Metadata & Content\nSubject: {subject}\nFrom: {sender}\nBody:\n{body_text[:3000]}\n",
     ]
     if thread_content:
         prompt_parts.append(f"## Thread Context (newest last)\n{thread_content[:4000]}\n")
@@ -132,13 +131,15 @@ async def generate_draft(
 
     user_prompt = "\n---\n".join(prompt_parts)
 
-    llm = ChatOpenAI(
-        model=getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
-        temperature=0.3,
-        api_key=settings.OPENAI_API_KEY,
-    )
-    if settings.openai_base_url:
-        llm.base_url = settings.openai_base_url
+    llm_kwargs = {
+        "model": getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
+        "temperature": 0.3,
+        "api_key": settings.OPENAI_API_KEY,
+    }
+    if getattr(settings, "openai_base_url", None):
+        llm_kwargs["base_url"] = settings.openai_base_url
+
+    llm = ChatOpenAI(**llm_kwargs)
 
     structured_llm = llm.with_structured_output(DraftOutput)
 
@@ -200,6 +201,9 @@ async def generate_draft(
         version_history=[version_entry],
         status="drafting",
     )
+    setattr(draft, "has_gaps", result.has_gaps)
+    setattr(draft, "gap_notes", result.gap_notes)
+
     db.add(draft)
     await db.commit()
     await db.refresh(draft)
@@ -215,6 +219,8 @@ async def generate_draft(
             "email_id": str(email_id),
             "status": "drafting",
             "current_body": draft_body,
+            "has_gaps": "1" if result.has_gaps else "0",
+            "gap_notes": json.dumps(result.gap_notes),
         })
         await r.expire(redis_key, 86400)  # 24h expiration
         await r.close()

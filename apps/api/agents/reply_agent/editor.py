@@ -65,13 +65,15 @@ async def edit_draft(
     current_body = draft.current_body
     current_version = len(version_history) + 1
 
-    llm = ChatOpenAI(
-        model=getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
-        temperature=0.3,
-        api_key=settings.OPENAI_API_KEY,
-    )
-    if settings.openai_base_url:
-        llm.base_url = settings.openai_base_url
+    llm_kwargs = {
+        "model": getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
+        "temperature": 0.3,
+        "api_key": settings.OPENAI_API_KEY,
+    }
+    if getattr(settings, "openai_base_url", None):
+        llm_kwargs["base_url"] = settings.openai_base_url
+
+    llm = ChatOpenAI(**llm_kwargs)
 
     prompt = (
         f"## Current Draft Body (PRESERVE MANUAL CHANGES AND STRUCTURE)\n{current_body}\n\n"
