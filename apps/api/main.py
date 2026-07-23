@@ -53,11 +53,11 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Error stopping WebSocket event broadcaster: {str(e)}")
 
-# Register CORS middleware (locked to known origins from settings)
+# Register CORS middleware (allowing local origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -183,7 +183,8 @@ async def health_check():
 app.include_router(webhooks.router)
 
 from routers import integrations, inbox, knowledge, payments, dashboard, command_center, calendar, research, playbooks, vip_contacts, settings as settings_router, replies
-from websocket import router as websocket_router
+import websocket as ws_module
+websocket_router = ws_module.router
 app.include_router(integrations.router)
 app.include_router(inbox.router)
 app.include_router(knowledge.router)
