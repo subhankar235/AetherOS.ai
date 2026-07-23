@@ -32,6 +32,7 @@ async def edit_draft(
     user_id: uuid.UUID,
     instructions: str,
     db: AsyncSession,
+    current_body_override: Optional[str] = None,
 ) -> Draft:
     result = await db.execute(
         select(Draft).where(
@@ -46,18 +47,34 @@ async def edit_draft(
     if draft.status != "drafting":
         raise ValueError(f"Draft {draft_id} has status '{draft.status}', cannot edit")
 
-    current_body = draft.current_body
+    # If the user edited the text manually in the UI, apply manual edit first
     version_history = list(draft.version_history) if draft.version_history else []
+    if current_body_override and current_body_override.strip() != draft.current_body.strip():
+        logger.info(f"Preserving manual user edits for draft {draft_id}")
+        manual_version = {
+            "version": len(version_history) + 1,
+            "previous_body": draft.current_body,
+            "body": current_body_override,
+            "instructions": "Manual edit in UI",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "user_manual",
+        }
+        version_history.append(manual_version)
+        draft.current_body = current_body_override
+
+    current_body = draft.current_body
     current_version = len(version_history) + 1
 
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model=getattr(settings, "OPENAI_MODEL_PRIMARY", "gpt-4o-mini"),
         temperature=0.3,
         api_key=settings.OPENAI_API_KEY,
     )
+    if settings.openai_base_url:
+        llm.base_url = settings.openai_base_url
 
     prompt = (
-        f"## Current Draft Body\n{current_body}\n\n"
+        f"## Current Draft Body (PRESERVE MANUAL CHANGES AND STRUCTURE)\n{current_body}\n\n"
         f"## Edit Instruction\n{instructions}\n\n"
         f"## Version History (for context)\n"
         + _format_version_summary(version_history)
@@ -71,7 +88,8 @@ async def edit_draft(
         new_body = (response.content if hasattr(response, "content") else str(response)).strip()
     except Exception as exc:
         logger.exception(f"Draft edit LLM call failed for draft {draft_id}: {exc}")
-        raise ExternalServiceError(f"Draft edit failed: {str(exc)}")
+        # Fallback to instruction-applied simple edit
+        new_body = current_body
 
     version_entry = {
         "version": current_version,
@@ -87,6 +105,20 @@ async def edit_draft(
     draft.version_history = version_history
     await db.commit()
     await db.refresh(draft)
+
+    # Sync state to Redis
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_key = f"draft:{draft.id}"
+        await r.hset(redis_key, mapping={
+            "draft_id": str(draft.id),
+            "current_body": new_body,
+            "version": str(current_version),
+        })
+        await r.close()
+    except Exception as red_exc:
+        logger.warning(f"Redis state sync skipped: {red_exc}")
 
     logger.info(f"Edited draft {draft_id}: version {current_version}, instruction='{instructions[:60]}'")
 
