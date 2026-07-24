@@ -1,4 +1,4 @@
-import { getStoredToken, clearStoredAuth } from '../lib/auth';
+import { getStoredToken } from '../lib/auth';
 
 let currentToken: string | null = null;
 
