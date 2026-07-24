@@ -70,6 +70,7 @@ export default function CommandCenter() {
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null); // tracks current speech for interruption
   const audioRef = useRef<HTMLAudioElement | null>(null); // ElevenLabs audio playback element
   const inputRef = useRef(""); // mirrors input state to avoid stale closures
+  const recognitionGenRef = useRef(0); // generation counter to prevent stale handler loops
 
   // Dedicated sidebar query results state
   const [queryResults, setQueryResults] = useState<MatchedEmail[]>([]);
@@ -420,6 +421,7 @@ export default function CommandCenter() {
   };
 
   // Speak text aloud via ElevenLabs TTS API, with browser fallback
+  // IMPORTANT: Starts listening simultaneously so user can interrupt mid-speech
   const speakText = async (text: string, onDone?: () => void) => {
     if (typeof window === 'undefined') {
       onDone?.();
@@ -457,15 +459,21 @@ export default function CommandCenter() {
         onDone?.();
       };
 
-      // Check if we were interrupted before playback started
-      if (!callActiveRef.current && !text.includes('Good')) {
+      // Check if call was ended before playback started
+      if (!callActiveRef.current) {
         URL.revokeObjectURL(audioUrl);
         setSpeaking(false);
-        onDone?.();
         return;
       }
 
       await audio.play();
+
+      // START LISTENING DURING SPEECH for interruption support
+      // User can speak while audio is playing — recognition will fire,
+      // cancelSpeech() will stop audio, and new command will be processed
+      if (callActiveRef.current) {
+        startListeningRound();
+      }
     } catch (err) {
       console.warn('ElevenLabs TTS failed, falling back to browser speech:', err);
       // Fallback to browser SpeechSynthesis
@@ -486,6 +494,8 @@ export default function CommandCenter() {
           onDone?.();
         };
         window.speechSynthesis.speak(utterance);
+        // Also listen during browser speech for interruption
+        if (callActiveRef.current) startListeningRound();
       } else {
         setSpeaking(false);
         onDone?.();
@@ -496,7 +506,19 @@ export default function CommandCenter() {
   // Start a new SpeechRecognition listening session (one utterance at a time)
   const startListeningRound = () => {
     if (typeof window === 'undefined') return;
+    if (!callActiveRef.current) return;
     if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) return;
+
+    // Increment generation — any handlers from previous recognition instances
+    // will see a stale generation and NOT restart (prevents infinite abort loops)
+    const gen = ++recognitionGenRef.current;
+
+    // Abort any existing recognition (this will fire onerror/onend on OLD instance,
+    // but those handlers will check generation and bail)
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
@@ -508,6 +530,7 @@ export default function CommandCenter() {
     setListening(true);
 
     recognition.onresult = (event: any) => {
+      if (gen !== recognitionGenRef.current) return; // stale
       const spokenText = event.results[0][0].transcript;
       // INTERRUPTION: cancel any ongoing speech immediately
       cancelSpeech();
@@ -516,27 +539,48 @@ export default function CommandCenter() {
     };
 
     recognition.onerror = (event: any) => {
-      console.warn('SpeechRecognition error:', event.error);
-      // On "no-speech" or "aborted", restart listening if call is still active
-      if (callActiveRef.current && (event.error === 'no-speech' || event.error === 'aborted')) {
+      if (gen !== recognitionGenRef.current) return; // stale — don't restart
+      // Only restart on no-speech (user was silent too long)
+      if (callActiveRef.current && event.error === 'no-speech') {
         setTimeout(() => {
-          if (callActiveRef.current) startListeningRound();
-        }, 300);
+          if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
+        }, 500);
+      }
+      // For 'aborted' — do nothing, it was our own intentional abort
+      // For other errors — log but don't loop
+      if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        console.warn('SpeechRecognition error:', event.error);
       }
     };
 
     recognition.onend = () => {
+      if (gen !== recognitionGenRef.current) return; // stale — don't restart
       setListening(false);
-      // Auto-restart listening if the call session is still active and not currently speaking
-      // (during speech, we'll restart after speech ends)
+      // Auto-restart listening if call is still active
+      if (callActiveRef.current) {
+        setTimeout(() => {
+          if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
+        }, 300);
+      }
     };
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (e) {
+      // Failed to start — retry once after delay
+      setTimeout(() => {
+        if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
+      }, 600);
+    }
   };
 
   // Send a voice command directly (avoids stale closure issues with setInput + send)
+  // IMPORTANT: Does NOT block on loading — allows interruption even during processing
   const sendVoiceCommand = async (spokenText: string) => {
-    if (!spokenText.trim() || loading) return;
+    if (!spokenText.trim()) return;
+
+    // If already loading (previous command still processing), cancel it conceptually
+    // and proceed with the new command (interruption takes priority)
     setListening(false);
 
     const userMessage: CommandTranscript = {
@@ -640,23 +684,134 @@ export default function CommandCenter() {
     }
   };
 
-  // Generate a fresh, dynamic greeting (never hardcoded)
+  // Generate a fresh, dynamic greeting WITH Aether identity
   const generateGreeting = (): string => {
     const hour = new Date().getHours();
     const timeGreetings = hour < 12
-      ? ["Good morning, Sir!", "Morning! What can I do for you?", "Hey, good morning!"]
+      ? [
+          "Good morning, Sir! I'm Aether, your AI assistant. What can I help you with?",
+          "Morning! Aether here. What do you need today?",
+          "Hey, good morning! I'm Aether. How can I assist you?",
+        ]
       : hour < 17
-      ? ["Good afternoon! How can I help?", "Hey there! What do you need?", "Afternoon, Sir. What's up?"]
-      : ["Good evening! What can I help with?", "Evening, Sir. Need something?", "Hey! How can I assist you tonight?"];
-    const general = [
-      "Hey, what can I take care of for you?",
-      "Hi Sir, what do you need help with?",
-      "What's on your mind? I'm ready.",
-      "Hey! Ready when you are.",
-      "Hi there! What can I do for you today?",
+      ? [
+          "Good afternoon! I'm Aether. What can I do for you?",
+          "Hey there! Aether here, ready to help. What do you need?",
+          "Afternoon, Sir. I'm Aether. What's on your mind?",
+        ]
+      : [
+          "Good evening! I'm Aether. What can I help with?",
+          "Evening, Sir. Aether here. Need something?",
+          "Hey! I'm Aether, your assistant. How can I help tonight?",
+        ];
+    return timeGreetings[Math.floor(Math.random() * timeGreetings.length)];
+  };
+
+  // Detect if user input is a casual/conversational question (not a command)
+  const isConversational = (text: string): boolean => {
+    const lower = text.toLowerCase().trim();
+    const patterns = [
+      /^(hi|hello|hey|yo|sup|hola)/,
+      /how are you/,
+      /what('?s| is) your name/,
+      /who are you/,
+      /what can you do/,
+      /what do you do/,
+      /how can you help/,
+      /are you (an? )?(ai|robot|bot|human|real)/,
+      /thank(s| you)/,
+      /good (morning|afternoon|evening|night)/,
+      /bye|goodbye|see you|later/,
+      /you('?re| are) (great|awesome|cool|amazing|the best)/,
+      /nice to meet/,
+      /what('?s| is) up/,
+      /how('?s| is) it going/,
+      /tell me about yourself/,
     ];
-    const all = [...timeGreetings, ...general];
-    return all[Math.floor(Math.random() * all.length)];
+    return patterns.some(p => p.test(lower));
+  };
+
+  // Generate a natural conversational response (no backend needed)
+  const getConversationalResponse = (text: string): string => {
+    const lower = text.toLowerCase().trim();
+
+    if (/how are you|how('?s| is) it going/.test(lower)) {
+      const responses = [
+        "I'm doing great, Sir! Ready to help you with anything.",
+        "All good on my end! What can I do for you?",
+        "I'm excellent, thank you for asking! How can I assist?",
+      ];
+      return responses[Math.floor(Math.random() * responses.length)];
+    }
+    if (/what('?s| is) your name|who are you|tell me about yourself/.test(lower)) {
+      return "I'm Aether, your AI assistant from AetherOS. I can manage your emails, schedule meetings, draft replies, and help with anything you need. Just tell me what to do!";
+    }
+    if (/what can you do|what do you do|how can you help/.test(lower)) {
+      return "I can check your emails, draft replies, schedule meetings, and handle tasks for you. Just tell me what you need, Sir, and I'll take care of it.";
+    }
+    if (/are you (an? )?(ai|robot|bot)/.test(lower)) {
+      return "I'm Aether, your personal AI assistant. I'm here to get things done for you. What do you need?";
+    }
+    if (/thank/.test(lower)) {
+      const responses = [
+        "You're welcome, Sir! Anything else?",
+        "Happy to help! Need anything else?",
+        "Anytime! What's next?",
+      ];
+      return responses[Math.floor(Math.random() * responses.length)];
+    }
+    if (/bye|goodbye|see you|later/.test(lower)) {
+      return "Goodbye, Sir! I'll be here whenever you need me.";
+    }
+    if (/^(hi|hello|hey|yo|sup|hola)|good (morning|afternoon|evening)|nice to meet/.test(lower)) {
+      const responses = [
+        "Hey! I'm Aether. What can I help you with?",
+        "Hi there! Ready to help. What do you need?",
+        "Hello, Sir! What can I do for you?",
+      ];
+      return responses[Math.floor(Math.random() * responses.length)];
+    }
+    if (/you('?re| are) (great|awesome|cool|amazing|the best)/.test(lower)) {
+      return "Thank you, Sir! Always happy to help. What's next?";
+    }
+    return "I'm here to help! Just tell me what you need.";
+  };
+
+  // Summarize a backend response for SHORT spoken output (don't read everything)
+  const summarizeForSpeech = (fullText: string, spokenText: string): string => {
+    // If response is already short (under 80 chars), speak it as-is
+    if (fullText.length < 80) return fullText;
+
+    // Count items in list-style responses
+    const itemMatches = fullText.match(/\d+\.\s\*\*/g) || fullText.match(/Found \d+ email/);
+    if (itemMatches) {
+      const countMatch = fullText.match(/Found (\d+) email/);
+      if (countMatch) {
+        return `Done Sir, I found ${countMatch[1]} emails for you. The results are in the sidebar. Want me to read them out?`;
+      }
+      const listCount = (fullText.match(/\d+\.\s\*\*/g) || []).length;
+      if (listCount > 0) {
+        return `Done Sir, I got ${listCount} results for you. They're in the sidebar. Want me to read them?`;
+      }
+    }
+
+    // Draft responses
+    if (fullText.toLowerCase().includes('draft') || fullText.toLowerCase().includes('reply')) {
+      return "Done Sir, I've drafted the reply for you. You can review it in the sidebar. Want me to read it out?";
+    }
+
+    // Meeting/calendar responses
+    if (fullText.toLowerCase().includes('meeting') || fullText.toLowerCase().includes('calendar') || fullText.toLowerCase().includes('scheduled')) {
+      return "Done Sir, I've set that up for you. The details are in the sidebar. Anything else?";
+    }
+
+    // Generic long response — truncate to first sentence
+    const firstSentence = fullText.split(/[.!?]\s/)[0];
+    if (firstSentence && firstSentence.length < 150) {
+      return firstSentence + ". Want me to read more details?";
+    }
+
+    return "Done Sir, I've completed that for you. The details are shown on screen. Want me to read them out?";
   };
 
   // ─── ONE BUTTON: Start / Stop the voice call ──────────────────────────
@@ -691,6 +846,7 @@ export default function CommandCenter() {
 
   const endTalkToAetherCall = () => {
     callActiveRef.current = false;
+    recognitionGenRef.current++; // invalidate all pending recognition handlers
     setIsCallActive(false);
     setListening(false);
     cancelSpeech();
