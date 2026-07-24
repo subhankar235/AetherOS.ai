@@ -136,6 +136,20 @@ async def extract_meeting_details(
                             if line.startswith("Subject:"):
                                 result.title = line.replace("Subject:", "").strip()
                                 break
+                
+                if not result.participants:
+                    import re
+                    found = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', user_input)
+                    if found:
+                        result.participants = list(set(found))
+                    elif email_context:
+                        sender_match = re.search(r'Sender:\s*([^\n]+)', email_context) or re.search(r'From:\s*([^\n]+)', email_context)
+                        if sender_match:
+                            snd = sender_match.group(1).strip()
+                            s_email = snd.split("<")[1].replace(">", "").strip() if "<" in snd and ">" in snd else snd
+                            if "@" in s_email:
+                                result.participants = [s_email]
+
                 logger.info(
                     f"Extracted meeting via '{cand['name']}': title='{result.title}', date={result.date}, "
                     f"time={result.time}, duration={result.duration_minutes}, participants={result.participants}"
@@ -145,6 +159,7 @@ async def extract_meeting_details(
             last_exc = exc
             logger.warning(f"Meeting details extraction attempt failed for '{cand['name']}': {exc}")
 
+    import re
     fallback_title = user_input
     if email_context and "Subject:" in email_context:
         for line in email_context.splitlines():
@@ -152,10 +167,19 @@ async def extract_meeting_details(
                 fallback_title = line.replace("Subject:", "").strip()
                 break
 
+    fallback_participants = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', user_input)
+    if not fallback_participants and email_context:
+        s_match = re.search(r'Sender:\s*([^\n]+)', email_context) or re.search(r'From:\s*([^\n]+)', email_context)
+        if s_match:
+            raw_s = s_match.group(1).strip()
+            parsed_s = raw_s.split("<")[1].replace(">", "").strip() if "<" in raw_s and ">" in raw_s else raw_s
+            if "@" in parsed_s:
+                fallback_participants = [parsed_s]
+
     return MeetingDetails(
         title=fallback_title or "Meeting Proposal",
         duration_minutes=60,
-        participants=[],
+        participants=fallback_participants,
     )
 
     # Fallback to heuristic defaults if all LLM attempts fail

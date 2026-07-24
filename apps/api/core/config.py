@@ -45,11 +45,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     LLM_FALLBACK_ORDER: str = "openrouter,groq,gemini"
 
-    ELEVENLABS_API_KEY: str = "sk_17c9803ed2daa90d1f648c98d93d21c5be8ffb63074beebb"
-    ELEVENLABS_VOICE_ID: str = "OtEfb2LVzIE45wdYe54M"
-    ELEVENLABS_STT_MODEL: str = "eleven-stt-v1"
-    ELEVENLABS_TTS_MODEL: str = "eleven-multilingual-v2"
-    ELEVENLABS_DEFAULT_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
+    ELEVENLABS_API_KEY: str = "sk_284d45a4dad81d02043013c390f204ffe38b5e4a80201b2f"
+    ELEVENLABS_VOICE_ID: str = "Ms9OTvWb99V6DwRHZn6q"
+    ELEVENLABS_STT_MODEL: str = "scribe_v2"
+    ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
+    ELEVENLABS_DEFAULT_VOICE_ID: str = "Ms9OTvWb99V6DwRHZn6q"
     ELEVENLABS_DEFAULT_MODEL_ID: str = "eleven_flash_v2_5"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
 

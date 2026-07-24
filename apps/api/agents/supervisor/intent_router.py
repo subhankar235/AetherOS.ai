@@ -248,24 +248,49 @@ def _parse_llm_response(
 def _fallback_classification(raw_input: str) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
-    # 1. Reply keywords / typos: reply, eply, rply, draft, compose, write, answer, respond
-    if any(k in lowered for k in ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"]):
+    has_reply = any(k in lowered for k in ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"])
+    has_schedule = any(k in lowered for k in ["schedule", "sdhudle", "shdule", "schdule", "meeting", "meet", "calendar", "book", "slot", "appointment"])
+    has_inbox = any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours", "from", "form", "frm"])
+
+    # Combined Multi-step commands (e.g., schedule a meeting AND make a draft)
+    if has_schedule and has_reply:
+        return {
+            "intent": "multi_step",
+            "tasks": [
+                {"agent": "calendar_agent", "action": "schedule", "params": {"description": raw_input}},
+                {"agent": "reply_agent", "action": "draft", "params": {"instructions": raw_input, "email_reference": "last email"}}
+            ],
+            "clarification_text": None,
+        }
+
+    if has_inbox and has_reply and any(k in lowered for k in ["then", "and then", "after that", "and draft", "and reply", "and make"]):
+        return {
+            "intent": "multi_step",
+            "tasks": [
+                {"agent": "inbox_agent", "action": "search", "params": {"query": raw_input}},
+                {"agent": "reply_agent", "action": "draft", "params": {"instructions": raw_input, "email_reference": "last email"}}
+            ],
+            "clarification_text": None,
+        }
+
+    # 1. Reply keywords
+    if has_reply:
         return {
             "intent": "single",
             "tasks": [{"agent": "reply_agent", "action": "draft", "params": {"instructions": raw_input, "email_reference": "last email"}}],
             "clarification_text": None,
         }
 
-    # 2. Inbox search / fetch / recent keywords: search, find, show, list, open, read, email, mail, inbox, recent, past, give, get, fetch, unread, hrs, hours, from, form, frm
-    if any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours", "from", "form", "frm"]):
+    # 2. Inbox search keywords
+    if has_inbox:
         return {
             "intent": "single",
             "tasks": [{"agent": "inbox_agent", "action": "search", "params": {"query": raw_input}}],
             "clarification_text": None,
         }
 
-    # 3. Schedule / Calendar keywords: schedule, meeting, meet, calendar, book, slot, appointment
-    if any(k in lowered for k in ["schedule", "meeting", "meet", "calendar", "book", "slot", "appointment"]):
+    # 3. Schedule / Calendar keywords
+    if has_schedule:
         return {
             "intent": "single",
             "tasks": [{"agent": "calendar_agent", "action": "schedule", "params": {"description": raw_input}}],

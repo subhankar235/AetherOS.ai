@@ -68,7 +68,8 @@ async def create_event(
     req = service.events().insert(
         calendarId=calendar_id,
         body=event_body,
-        conferenceDataVersion=conference_data_version
+        conferenceDataVersion=conference_data_version,
+        sendUpdates="all"
     )
     return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=6.0)
 
@@ -92,7 +93,8 @@ async def update_event(
         calendarId=calendar_id,
         eventId=event_id,
         body=event_body,
-        conferenceDataVersion=conference_data_version
+        conferenceDataVersion=conference_data_version,
+        sendUpdates="all"
     )
     return await asyncio.wait_for(asyncio.to_thread(req.execute), timeout=6.0)
 
