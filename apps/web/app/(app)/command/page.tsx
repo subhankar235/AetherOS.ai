@@ -68,6 +68,7 @@ export default function CommandCenter() {
   const recognitionRef = useRef<any>(null);
   const callActiveRef = useRef(false); // tracks call state across async closures
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null); // tracks current speech for interruption
+  const audioRef = useRef<HTMLAudioElement | null>(null); // ElevenLabs audio playback element
   const inputRef = useRef(""); // mirrors input state to avoid stale closures
 
   // Dedicated sidebar query results state
@@ -398,8 +399,19 @@ export default function CommandCenter() {
   };
   // ─── VOICE ASSISTANT: Full Implementation ───────────────────────────────
 
-  // Cancel any ongoing speech synthesis immediately (interruption support)
+  // Cancel any ongoing speech immediately (interruption support)
   const cancelSpeech = () => {
+    // Stop ElevenLabs audio playback
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      // Revoke the blob URL to free memory
+      if (audioRef.current.src) {
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+      audioRef.current = null;
+    }
+    // Also cancel browser speech synthesis as fallback
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -407,32 +419,78 @@ export default function CommandCenter() {
     setSpeaking(false);
   };
 
-  // Speak text aloud via SpeechSynthesis, then call onDone when finished
-  const speakText = (text: string, onDone?: () => void) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
+  // Speak text aloud via ElevenLabs TTS API, with browser fallback
+  const speakText = async (text: string, onDone?: () => void) => {
+    if (typeof window === 'undefined') {
       onDone?.();
       return;
     }
     // Cancel any existing speech first
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-    utteranceRef.current = utterance;
+    cancelSpeech();
     setSpeaking(true);
 
-    utterance.onend = () => {
-      utteranceRef.current = null;
-      setSpeaking(false);
-      onDone?.();
-    };
-    utterance.onerror = () => {
-      utteranceRef.current = null;
-      setSpeaking(false);
-      onDone?.();
-    };
-    window.speechSynthesis.speak(utterance);
+    try {
+      // Call our server-side TTS proxy (ElevenLabs)
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) throw new Error(`TTS API returned ${res.status}`);
+
+      const audioBlob = await res.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setSpeaking(false);
+        onDone?.();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setSpeaking(false);
+        onDone?.();
+      };
+
+      // Check if we were interrupted before playback started
+      if (!callActiveRef.current && !text.includes('Good')) {
+        URL.revokeObjectURL(audioUrl);
+        setSpeaking(false);
+        onDone?.();
+        return;
+      }
+
+      await audio.play();
+    } catch (err) {
+      console.warn('ElevenLabs TTS failed, falling back to browser speech:', err);
+      // Fallback to browser SpeechSynthesis
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US';
+        utterance.rate = 1.05;
+        utteranceRef.current = utterance;
+        utterance.onend = () => {
+          utteranceRef.current = null;
+          setSpeaking(false);
+          onDone?.();
+        };
+        utterance.onerror = () => {
+          utteranceRef.current = null;
+          setSpeaking(false);
+          onDone?.();
+        };
+        window.speechSynthesis.speak(utterance);
+      } else {
+        setSpeaking(false);
+        onDone?.();
+      }
+    }
   };
 
   // Start a new SpeechRecognition listening session (one utterance at a time)
