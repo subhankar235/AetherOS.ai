@@ -40,13 +40,9 @@ export function onAuthChanged(callback: (token: string | null) => void): () => v
 
 export async function signInWithClerk(): Promise<AuthState> {
   return new Promise((resolve, reject) => {
-    const authUrl = new URL(CLERK_SIGN_IN_URL);
-    authUrl.searchParams.set('redirect_url', REDIRECT_URL);
-
     chrome.identity.launchWebAuthFlow(
       {
-        url: authUrl.toString(),
-        redirectUrl: REDIRECT_URL,
+        url: CLERK_SIGN_IN_URL,
         interactive: true,
       },
       async (responseUrl) => {

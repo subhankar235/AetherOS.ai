@@ -62,8 +62,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_TOKEN') {
     sendResponse({ token: currentToken });
   }
-  if (message.type === 'OPEN_SIDE_PANEL') {
-    chrome.sidePanel.open({ tabId: sender.tab?.id });
+  if (message.type === 'OPEN_SIDE_PANEL' && sender.tab?.id) {
+    chrome.sidePanel.open({ tabId: sender.tab.id });
     sendResponse({ success: true });
   }
   return true;
