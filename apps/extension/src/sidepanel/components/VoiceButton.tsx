@@ -1,39 +1,18 @@
 import { useRef } from 'react';
 import { useStore } from '../../lib/stores';
+import { AudioRecorder } from '../../utils/audio';
 import { sendVoiceCommand } from '../../lib/api-client';
 import { Mic, MicOff } from 'lucide-react';
 
 export function VoiceButton() {
   const { isListening, setListening, sessionId, addTranscriptEntry } = useStore();
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<AudioRecorder | null>(null);
 
   const handleMouseDown = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 48000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
-      streamRef.current = stream;
-
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-
-      const recorder = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      };
-      recorder.start(250);
-      mediaRecorderRef.current = recorder;
+      const recorder = new AudioRecorder();
+      await recorder.startRecording();
+      recorderRef.current = recorder;
       setListening(true);
     } catch (err) {
       console.error('Failed to start recording:', err);
@@ -41,26 +20,14 @@ export function VoiceButton() {
   };
 
   const handleMouseUp = async () => {
-    const recorder = mediaRecorderRef.current;
+    const recorder = recorderRef.current;
     if (!recorder) return;
 
     setListening(false);
-    mediaRecorderRef.current = null;
-
-    const blob = await new Promise<Blob>((resolve) => {
-      recorder.onstop = () => {
-        const b = new Blob(chunksRef.current, { type: recorder.mimeType });
-        chunksRef.current = [];
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
-        resolve(b);
-      };
-      recorder.stop();
-    });
+    recorderRef.current = null;
 
     try {
+      const blob = await recorder.stopRecording();
       const data = await sendVoiceCommand(blob, sessionId);
 
       addTranscriptEntry({
@@ -73,7 +40,7 @@ export function VoiceButton() {
       addTranscriptEntry({
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: data.response.result?.message as string || 'Voice command processed.',
+        content: (data.response.result?.message as string) || 'Voice command processed.',
         agent_used: data.response.agent,
         timestamp: new Date().toISOString(),
       });
@@ -87,7 +54,7 @@ export function VoiceButton() {
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
       onMouseLeave={() => {
-        if (mediaRecorderRef.current) handleMouseUp();
+        if (recorderRef.current) handleMouseUp();
       }}
       className={`rounded-lg p-2 transition-colors ${
         isListening
