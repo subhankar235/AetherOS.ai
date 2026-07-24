@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -64,6 +64,11 @@ export default function CommandCenter() {
 
   const [sessionId] = useState(() => crypto.randomUUID());
   const [loading, setLoading] = useState(false);
+  const [isCallActive, setIsCallActive] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const callActiveRef = useRef(false); // tracks call state across async closures
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null); // tracks current speech for interruption
+  const inputRef = useRef(""); // mirrors input state to avoid stale closures
 
   // Dedicated sidebar query results state
   const [queryResults, setQueryResults] = useState<MatchedEmail[]>([]);
@@ -389,12 +394,265 @@ export default function CommandCenter() {
       setTranscript((t) => [...t, reply]);
     } finally {
       setLoading(false);
-      if (mode === "voice") {
-        setSpeaking(true);
-        setTimeout(() => setSpeaking(false), 1800);
-      }
     }
   };
+  // ─── VOICE ASSISTANT: Full Implementation ───────────────────────────────
+
+  // Cancel any ongoing speech synthesis immediately (interruption support)
+  const cancelSpeech = () => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    utteranceRef.current = null;
+    setSpeaking(false);
+  };
+
+  // Speak text aloud via SpeechSynthesis, then call onDone when finished
+  const speakText = (text: string, onDone?: () => void) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      onDone?.();
+      return;
+    }
+    // Cancel any existing speech first
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utteranceRef.current = utterance;
+    setSpeaking(true);
+
+    utterance.onend = () => {
+      utteranceRef.current = null;
+      setSpeaking(false);
+      onDone?.();
+    };
+    utterance.onerror = () => {
+      utteranceRef.current = null;
+      setSpeaking(false);
+      onDone?.();
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Start a new SpeechRecognition listening session (one utterance at a time)
+  const startListeningRound = () => {
+    if (typeof window === 'undefined') return;
+    if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+    recognitionRef.current = recognition;
+    setListening(true);
+
+    recognition.onresult = (event: any) => {
+      const spokenText = event.results[0][0].transcript;
+      // INTERRUPTION: cancel any ongoing speech immediately
+      cancelSpeech();
+      // Send the user's voice input through the command pipeline
+      sendVoiceCommand(spokenText);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.warn('SpeechRecognition error:', event.error);
+      // On "no-speech" or "aborted", restart listening if call is still active
+      if (callActiveRef.current && (event.error === 'no-speech' || event.error === 'aborted')) {
+        setTimeout(() => {
+          if (callActiveRef.current) startListeningRound();
+        }, 300);
+      }
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+      // Auto-restart listening if the call session is still active and not currently speaking
+      // (during speech, we'll restart after speech ends)
+    };
+
+    recognition.start();
+  };
+
+  // Send a voice command directly (avoids stale closure issues with setInput + send)
+  const sendVoiceCommand = async (spokenText: string) => {
+    if (!spokenText.trim() || loading) return;
+    setListening(false);
+
+    const userMessage: CommandTranscript = {
+      id: crypto.randomUUID(),
+      role: "user",
+      mode: "voice",
+      content: spokenText,
+      at: new Date().toISOString(),
+    };
+    setTranscript((t) => [...t, userMessage]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers = await getHeaders();
+      const formData = new FormData();
+      formData.append("command", spokenText);
+      formData.append("session_id", sessionId);
+
+      const res = await fetch(`${apiUrl}/command`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const data = await res.json();
+      const respObj = data.response || {};
+
+      let responseText = "Done, Sir.";
+      if (respObj.status === "clarification_needed") {
+        responseText = respObj.result?.clarification || "Could you clarify that for me?";
+      } else if (respObj.result?.message) {
+        responseText = respObj.result.message;
+      } else if (respObj.result?.summary) {
+        responseText = respObj.result.summary;
+      } else if (respObj.result?.answer) {
+        responseText = respObj.result.answer;
+      } else if (typeof respObj.result === "string") {
+        responseText = respObj.result;
+      }
+
+      // Handle drafts, proposals, sidebar updates (same as text send)
+      const items: MatchedEmail[] = respObj.result?.items || respObj.context_updates?.last_search_results || [];
+      if (items && items.length > 0) {
+        setQueryResults(items);
+        setQueryTitle(`Command Results: "${spokenText}"`);
+        setSelectedEmail(items[0]);
+      }
+      const resultTypeHeader = res.headers.get('X-Result-Type') || 'default';
+      setResultType(resultTypeHeader);
+
+      const draftId = respObj.result?.draft_id || respObj.context_updates?.active_draft_id;
+      const draftBody = respObj.result?.draft_body || respObj.context_updates?.active_draft_body;
+      if (draftId && draftBody) {
+        setActiveDraft({
+          draft_id: draftId,
+          draft_body: draftBody,
+          has_gaps: respObj.result?.has_gaps ?? false,
+          gap_notes: respObj.result?.gap_notes ?? [],
+          recipient: respObj.result?.target_email?.sender || items[0]?.sender || "Recipient",
+          subject: respObj.result?.target_email?.subject || items[0]?.subject || "Reply Draft",
+        });
+      }
+
+      const reply: CommandTranscript = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        mode: "voice",
+        content: responseText,
+        agentUsed: respObj.agent || "Supervisor",
+        at: new Date().toISOString(),
+        draftId,
+        draftBody,
+      };
+      setTranscript((t) => [...t, reply]);
+
+      // SPEAK the response aloud, then restart listening
+      speakText(responseText, () => {
+        if (callActiveRef.current) {
+          startListeningRound();
+        }
+      });
+    } catch (err: any) {
+      const errorMsg = `Sorry Sir, I couldn't process that. ${err.message || ""}`;
+      const reply: CommandTranscript = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        mode: "voice",
+        content: errorMsg,
+        agentUsed: "Supervisor",
+        at: new Date().toISOString(),
+      };
+      setTranscript((t) => [...t, reply]);
+      speakText(errorMsg, () => {
+        if (callActiveRef.current) startListeningRound();
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Generate a fresh, dynamic greeting (never hardcoded)
+  const generateGreeting = (): string => {
+    const hour = new Date().getHours();
+    const timeGreetings = hour < 12
+      ? ["Good morning, Sir!", "Morning! What can I do for you?", "Hey, good morning!"]
+      : hour < 17
+      ? ["Good afternoon! How can I help?", "Hey there! What do you need?", "Afternoon, Sir. What's up?"]
+      : ["Good evening! What can I help with?", "Evening, Sir. Need something?", "Hey! How can I assist you tonight?"];
+    const general = [
+      "Hey, what can I take care of for you?",
+      "Hi Sir, what do you need help with?",
+      "What's on your mind? I'm ready.",
+      "Hey! Ready when you are.",
+      "Hi there! What can I do for you today?",
+    ];
+    const all = [...timeGreetings, ...general];
+    return all[Math.floor(Math.random() * all.length)];
+  };
+
+  // ─── ONE BUTTON: Start / Stop the voice call ──────────────────────────
+  const startTalkToAetherCall = () => {
+    if (typeof window === 'undefined') return;
+    if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) {
+      alert('Speech Recognition is not supported in this browser. Please use Chrome.');
+      return;
+    }
+    callActiveRef.current = true;
+    setIsCallActive(true);
+
+    // Fresh greeting spoken aloud
+    const greeting = generateGreeting();
+    const greetMsg: CommandTranscript = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      mode: "voice",
+      content: greeting,
+      agentUsed: "Aether",
+      at: new Date().toISOString(),
+    };
+    setTranscript((t) => [...t, greetMsg]);
+
+    // Speak greeting, then start listening
+    speakText(greeting, () => {
+      if (callActiveRef.current) {
+        startListeningRound();
+      }
+    });
+  };
+
+  const endTalkToAetherCall = () => {
+    callActiveRef.current = false;
+    setIsCallActive(false);
+    setListening(false);
+    cancelSpeech();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
+  };
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      callActiveRef.current = false;
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+      cancelSpeech();
+    };
+  }, []);
+
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1fr_420px]">
@@ -410,32 +668,47 @@ export default function CommandCenter() {
         <Card className="flex flex-col items-center justify-center gap-4 p-8">
           <div className="relative">
             <div
-              className={`h-36 w-36 rounded-full bg-gradient-to-br from-primary via-primary/70 to-accent transition-all ${
-                speaking ? "scale-105 shadow-[0_0_60px_var(--color-primary)]" : ""
-              } ${listening ? "animate-pulse" : ""}`}
+              className={`h-36 w-36 rounded-full bg-gradient-to-br from-primary via-primary/70 to-accent transition-all duration-300 ${
+                speaking ? "scale-110 shadow-[0_0_80px_var(--color-primary)]" : ""
+              } ${listening ? "animate-pulse shadow-[0_0_40px_var(--color-primary)]" : ""} ${
+                loading ? "animate-spin opacity-70" : ""
+              }`}
             />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Sparkles className="h-10 w-10 text-primary-foreground" />
+              {speaking ? (
+                <Volume2 className="h-10 w-10 text-primary-foreground animate-pulse" />
+              ) : listening ? (
+                <Mic className="h-10 w-10 text-primary-foreground" />
+              ) : (
+                <Sparkles className="h-10 w-10 text-primary-foreground" />
+              )}
             </div>
           </div>
           <div className="text-center">
             <div className="text-sm font-medium">
-              {speaking ? "Speaking…" : listening ? "Listening…" : "Idle — say \"Hey Aether\""}
+              {speaking ? "Aether is speaking…" : listening ? "Listening to you…" : loading ? "Processing…" : isCallActive ? "Ready — speak anytime" : "Press the button to start"}
             </div>
-            <div className="text-xs text-muted-foreground">
-              Voice: ElevenLabs · Route: Supervisor
-            </div>
+            {isCallActive && (
+              <div className="text-xs text-muted-foreground mt-1">
+                Voice session active · Speak naturally
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <Button
-              variant={listening ? "destructive" : "default"}
-              onClick={() => setListening((v) => !v)}
+              size="lg"
+              variant={isCallActive ? "destructive" : "default"}
+              className="px-8 py-3 text-base font-semibold"
+              onClick={() => {
+                if (isCallActive) {
+                  endTalkToAetherCall();
+                } else {
+                  startTalkToAetherCall();
+                }
+              }}
             >
-              {listening ? <MicOff className="mr-1.5 h-4 w-4" /> : <Mic className="mr-1.5 h-4 w-4" />}
-              {listening ? "Stop" : "Talk to Aether"}
-            </Button>
-            <Button variant="outline" onClick={() => setSpeaking((v) => !v)}>
-              <Volume2 className="mr-1.5 h-4 w-4" /> Replay last
+              {isCallActive ? <MicOff className="mr-2 h-5 w-5" /> : <Mic className="mr-2 h-5 w-5" />}
+              {isCallActive ? "End Call" : "Talk to Agent"}
             </Button>
           </div>
         </Card>
