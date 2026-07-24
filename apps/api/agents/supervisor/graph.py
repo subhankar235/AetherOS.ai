@@ -687,19 +687,19 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
             if not target_email and params.get("last_search_results") and isinstance(params["last_search_results"], list) and len(params["last_search_results"]) > 0:
                 item = params["last_search_results"][-1] if email_ref in ("last email", "the last email", "last one") else params["last_search_results"][0]
-                if isinstance(item, dict):
+                if isinstance(item, dict) and item.get("id"):
                     try:
                         target_email = await db.scalar(select(EmailMetadata).where(EmailMetadata.id == safe_uuid(item.get("id"))))
                     except Exception:
                         pass
-                    if not target_email:
+                    if not target_email and item.get("sender"):
                         target_email = EmailMetadata(
                             id=safe_uuid(item.get("id")) or uuid.uuid4(),
                             user_id=uid,
-                            gmail_message_id=str(item.get("id")) if item.get("id") else f"msg_auto_{uuid.uuid4().hex[:8]}",
-                            sender=item.get("sender") or "Email Sender <sender@domain.com>",
+                            gmail_message_id=str(item.get("gmail_message_id") or item.get("id")),
+                            sender=item.get("sender"),
                             subject=item.get("subject") or "Email Message",
-                            summary=item.get("summary") or item.get("snippet") or "Email summary",
+                            summary=item.get("summary") or item.get("snippet") or "",
                             priority="Medium",
                             category="General",
                             received_at=datetime.datetime.now(datetime.timezone.utc),
@@ -709,21 +709,51 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                         await db.refresh(target_email)
 
             if not target_email:
-                # Auto-create initial email metadata so a real Draft is ALWAYS generated & saved
-                target_email = EmailMetadata(
-                    id=uuid.uuid4(),
-                    user_id=uid,
-                    gmail_message_id=f"msg_auto_{uuid.uuid4().hex[:8]}",
-                    sender="Devfolio Team <team@devfolio.co>",
-                    subject="Inquiry regarding partnership and subscription terms",
-                    summary="Hi, I would like to confirm our partnership details and subscription terms.",
-                    priority="Medium",
-                    category="General",
-                    received_at=datetime.datetime.now(datetime.timezone.utc),
-                )
-                db.add(target_email)
-                await db.commit()
-                await db.refresh(target_email)
+                # Retrieve the latest real email from the user's indexed database
+                stmt_latest = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
+                res_latest = await db.execute(stmt_latest)
+                target_email = res_latest.scalar_one_or_none()
+
+            if not target_email:
+                # Try pulling real emails from live Gmail API if none indexed yet
+                try:
+                    from integrations.gmail_client import search_messages, fetch_message
+                    search_res = await search_messages(uid, "label:INBOX", None, db)
+                    msgs = search_res.get("messages", [])
+                    if msgs and msgs[0].get("id"):
+                        full_msg = await fetch_message(uid, msgs[0]["id"], db)
+                        if isinstance(full_msg, dict):
+                            hdrs = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                            sndr = hdrs.get("from", "")
+                            sbj = hdrs.get("subject", "")
+                            if sndr:
+                                target_email = EmailMetadata(
+                                    id=uuid.uuid4(),
+                                    user_id=uid,
+                                    gmail_message_id=msgs[0]["id"],
+                                    sender=sndr,
+                                    subject=sbj or "(no subject)",
+                                    summary=full_msg.get("snippet", ""),
+                                    priority="Medium",
+                                    category="General",
+                                    received_at=datetime.datetime.now(datetime.timezone.utc),
+                                )
+                                db.add(target_email)
+                                await db.commit()
+                                await db.refresh(target_email)
+                except Exception as gmail_exc:
+                    logger.warning(f"Live Gmail fetch in reply_agent failed: {gmail_exc}")
+
+            if not target_email:
+                return {
+                    "agent": "reply_agent",
+                    "status": "clarification_needed",
+                    "result": {
+                        "clarification": "I couldn't find an email in your mailbox to reply to. Which email or sender would you like me to draft a reply for?",
+                    },
+                    "context_updates": {},
+                    "requires_approval": False,
+                }
 
             # Generate real Draft record in database
             draft = await generate_draft(
@@ -977,24 +1007,6 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                     "message": "Meeting scheduled successfully.",
                     "meeting": meeting_obj,
                     "source_email": source_email_obj,
-                    "rich_message": rich_msg,
-                    "title": details.title,
-                    "duration_minutes": details.duration_minutes,
-                    "participants": details.participants,
-                    "target_email": {
-                        "subject": target_email.subject,
-                        "sender": target_email.sender,
-                        "id": str(target_email.id),
-                    } if target_email else None,
-                    "free_slots": free_slots,
-                    "double_booking_warnings": double_book_warnings,
-                    "preview_id": preview["preview_id"],
-                    "approval_id": str(approval_id),
-                    "start": selected_start,
-                    "end": selected_end,
-                    "meet_link": meet_link,
-                    "hangout_link": meet_link,
-                    "event_body": preview.get("event_body"),
                 },
                 "context_updates": {
                     "active_calendar_preview_id": preview["preview_id"],

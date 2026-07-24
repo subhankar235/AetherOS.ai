@@ -266,10 +266,17 @@ export default function CommandCenter() {
       const resultTypeHeader = res.headers.get('X-Result-Type') || 'default';
       setResultType(resultTypeHeader);
 
-      if (respObj.result?.message) {
-        responseText = respObj.result.message;
+      if (respObj.result?.meeting) {
+        const meetingSchema = {
+          status: respObj.result.status || "success",
+          message: respObj.result.message || "Meeting scheduled successfully.",
+          meeting: respObj.result.meeting,
+        };
+        responseText = JSON.stringify(meetingSchema, null, 2);
       } else if (respObj.status === "clarification_needed") {
         responseText = respObj.result?.clarification || "Could you please clarify your request?";
+      } else if (respObj.result?.message) {
+        responseText = respObj.result.message;
       } else if (respObj.result?.summary) {
         responseText = respObj.result.summary;
       } else if (respObj.result?.answer) {
@@ -316,37 +323,40 @@ export default function CommandCenter() {
         }
       }
 
-      const previewId = respObj.result?.preview_id || respObj.context_updates?.active_calendar_preview_id;
-      const approvalId = respObj.result?.approval_id || respObj.context_updates?.active_calendar_approval_id;
-      const meetingStart = respObj.result?.start;
-      const meetingEnd = respObj.result?.end;
-      const meetingTitle = respObj.result?.title || "Meeting Proposal";
-      const meetLink = respObj.result?.meet_link || respObj.result?.hangout_link || "https://meet.google.com/abc-defg-hij";
-      const doubleBookWarnings = respObj.result?.double_booking_warnings || [];
+      const mData = respObj.result?.meeting;
+      const sEmailData = respObj.result?.source_email;
+      const previewId = mData?.id || respObj.context_updates?.active_calendar_preview_id;
+      const approvalId = respObj.context_updates?.active_calendar_approval_id || previewId;
+      const meetingStart = mData?.start_time;
+      const meetingEnd = mData?.end_time;
+      const meetingTitle = mData?.title || "Meeting Proposal";
+      const meetLink = mData?.meet_link || "https://meet.google.com/abc-defg-hij";
 
       if (previewId && meetingStart && meetingEnd) {
-          setActiveProposal({
-            preview_id: previewId,
-            approval_id: approvalId,
-            title: meetingTitle,
-            start: meetingStart,
-            end: meetingEnd,
-            duration_minutes: respObj.result?.duration_minutes || 60,
-            attendees: respObj.result?.participants || [],
-            meet_link: meetLink,
-            target_email: respObj.result?.target_email,
-            source_email: respObj.result?.source_email,
-            double_booking_warnings: doubleBookWarnings,
-          });
+        const attendeeEmails = (mData?.attendees || []).map((a: any) => typeof a === "object" ? a.email || a.name : String(a));
+        setActiveProposal({
+          preview_id: previewId,
+          approval_id: approvalId,
+          title: meetingTitle,
+          start: meetingStart,
+          end: meetingEnd,
+          duration_minutes: 60,
+          attendees: attendeeEmails,
+          meet_link: meetLink,
+          source_email: sEmailData,
+        });
 
         try {
           const newMeetingObj = {
             id: previewId,
             status: "previewed",
-            participants: (respObj.result?.participants || []).map((p: string) => ({ email: p })),
-            proposed_slots: [{ start: meetingStart, end: meetingEnd, title: meetingTitle }],
+            participants: attendeeEmails.map((e: string) => ({ email: e })),
+            proposed_slots: [{ start: meetingStart, end: meetingEnd, title: meetingTitle, meet_link: meetLink }],
             created_at: new Date().toISOString(),
             hangout_link: meetLink,
+            meet_link: meetLink,
+            source_email: sEmailData,
+            meeting: mData,
           };
           const existingM = JSON.parse(localStorage.getItem("active_meetings_cache") || "[]");
           const updatedM = [newMeetingObj, ...existingM.filter((m: any) => m.id !== previewId)];
@@ -492,20 +502,43 @@ export default function CommandCenter() {
                 )}
 
                 {/* DIRECT ACTION CARD FOR CALENDAR PROPOSAL */}
-                {(m.agentUsed === "calendar_agent" || m.content.includes("Calendar Proposal") || m.content.includes("Proposed Slot")) && m.role === "assistant" && (
+                {(m.agentUsed === "calendar_agent" || m.content.includes("Meeting scheduled successfully") || m.content.includes("meeting") || m.content.includes("Calendar Proposal")) && m.role === "assistant" && (
                   <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3.5 space-y-2.5 shadow-sm text-xs">
                     <div className="flex items-center justify-between font-semibold">
                       <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
-                        <Sparkles className="h-4 w-4" /> Calendar Meeting Proposal Generated
+                        <Sparkles className="h-4 w-4" /> Meeting Scheduled / Proposed
                       </span>
                       <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-500">
-                        Awaiting Approval
+                        Calendar Agent
                       </Badge>
                     </div>
+
+                    {activeProposal?.source_email && (
+                      <div className="rounded bg-emerald-500/10 p-2.5 space-y-1 border border-emerald-500/20 text-[11px]">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">Source Email</span>
+                          <Link href="/inbox">
+                            <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-emerald-600 dark:text-emerald-400 hover:underline">
+                              Open Original Email ➔
+                            </Button>
+                          </Link>
+                        </div>
+                        <div><span className="font-semibold">Subject:</span> "{activeProposal.source_email.subject}"</div>
+                        {activeProposal.source_email.from && (
+                          <div><span className="font-semibold">From:</span> {activeProposal.source_email.from.name} &lt;{activeProposal.source_email.from.email}&gt;</div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       <Link href="/calendar">
                         <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700 font-semibold text-xs gap-1.5">
-                          View & Approve in Calendar Page (/calendar) <ChevronRight className="h-3.5 w-3.5" />
+                          View & Manage in Calendar Page (/calendar) <ChevronRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </Link>
+                      <Link href="/inbox">
+                        <Button size="sm" variant="outline" className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400 font-semibold text-xs gap-1.5">
+                          <Mail className="h-3.5 w-3.5" /> View Original Email
                         </Button>
                       </Link>
                     </div>
