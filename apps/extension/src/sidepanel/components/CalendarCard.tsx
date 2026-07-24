@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ActiveCalendarProposal } from '../../lib/types';
 import { confirmCalendarEvent } from '../../lib/api-client';
 import { useStore } from '../../lib/stores';
-import { CalendarIcon, Video } from 'lucide-react';
+import { CalendarIcon, Video, Check, X } from 'lucide-react';
 
 interface CalendarCardProps {
   proposal: ActiveCalendarProposal;
@@ -25,66 +25,85 @@ export function CalendarCard({ proposal }: CalendarCardProps) {
   };
 
   return (
-    <div className="rounded-lg border border-emerald-500/60 bg-card p-3 shadow-sm space-y-2">
-      <div className="flex items-center justify-between border-b pb-1.5">
-        <div className="flex items-center gap-1.5">
-          <CalendarIcon className="h-3.5 w-3.5 text-emerald-500" />
-          <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider">
-            Calendar Proposal
+    <div className="group relative overflow-hidden rounded-xl border border-emerald-500/25 bg-gradient-to-b from-card to-emerald-500/[0.02] shadow-sm transition-all hover:border-emerald-500/35 hover:shadow-md">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
+
+      <div className="p-3 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <div className="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/10">
+              <CalendarIcon className="h-3 w-3 text-emerald-400" />
+            </div>
+            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+              Calendar Proposal
+            </span>
+          </div>
+          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-400 border border-emerald-500/20">
+            Awaiting Approval
           </span>
         </div>
-        <span className="rounded border border-emerald-500/50 px-1.5 py-0 text-[9px] text-emerald-600">
-          Awaiting Approval
-        </span>
-      </div>
 
-      <div className="space-y-1 text-xs">
-        <div>
-          <span className="font-medium text-muted-foreground">Title:</span>{' '}
-          <span className="font-medium">{proposal.title}</span>
-        </div>
-        <div>
-          <span className="font-medium text-muted-foreground">Time:</span>{' '}
-          <span className="font-medium">
-            {new Date(proposal.start).toLocaleString([], {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            })}{' '}
-            –{' '}
-            {new Date(proposal.end).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </span>
-        </div>
-        {proposal.attendees.length > 0 && (
-          <div>
-            <span className="font-medium text-muted-foreground">Attendees:</span>{' '}
-            <span className="font-medium">{proposal.attendees.join(', ')}</span>
+        <div className="space-y-1.5 text-xs">
+          <div className="flex items-start gap-1.5">
+            <span className="mt-0.5 shrink-0 text-muted-foreground">Title:</span>
+            <span className="font-semibold text-foreground/90 leading-snug">{proposal.title}</span>
           </div>
-        )}
-        {proposal.meet_link && (
-          <div className="flex items-center gap-1 text-emerald-600">
-            <Video className="h-3 w-3" />
-            <span className="text-[10px] truncate">{proposal.meet_link}</span>
+          <div className="flex items-start gap-1.5">
+            <span className="mt-0.5 shrink-0 text-muted-foreground">Time:</span>
+            <span className="font-medium text-foreground/80 leading-snug">
+              {new Date(proposal.start).toLocaleString([], {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })}{' '}
+              –{' '}
+              {new Date(proposal.end).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </span>
           </div>
-        )}
-      </div>
+          {proposal.attendees.length > 0 && (
+            <div className="flex items-start gap-1.5">
+              <span className="mt-0.5 shrink-0 text-muted-foreground">With:</span>
+              <span className="font-medium text-foreground/80 leading-snug">
+                {proposal.attendees.join(', ')}
+              </span>
+            </div>
+          )}
+          {proposal.meet_link && (
+            <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/5 rounded-lg px-2 py-1.5">
+              <Video className="h-3 w-3 shrink-0" />
+              <span className="text-[10px] truncate font-medium">{proposal.meet_link}</span>
+            </div>
+          )}
+        </div>
 
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleConfirm}
-          disabled={confirming}
-          className="flex-1 rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-        >
-          {confirming ? 'Creating...' : 'Approve & Create'}
-        </button>
-        <button
-          onClick={() => setActiveProposal(null)}
-          className="rounded p-1.5 text-muted-foreground hover:text-destructive"
-        >
-          <span className="text-xs">✕</span>
-        </button>
+        <div className="flex items-center gap-2 pt-0.5">
+          <button
+            onClick={handleConfirm}
+            disabled={confirming}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition-all hover:from-emerald-500 hover:to-emerald-400 hover:shadow-md active:scale-[0.98] disabled:opacity-40 disabled:hover:shadow-none disabled:active:scale-100"
+          >
+            {confirming ? (
+              <>
+                <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                Creating...
+              </>
+            ) : (
+              <>
+                <Check className="h-3 w-3" />
+                Approve & Create
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveProposal(null)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+            title="Discard"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );

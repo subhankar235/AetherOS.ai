@@ -50,20 +50,25 @@ export function VoiceButton() {
   };
 
   return (
-    <button
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => {
-        if (recorderRef.current) handleMouseUp();
-      }}
-      className={`rounded-lg p-2 transition-colors ${
-        isListening
-          ? 'bg-destructive text-destructive-foreground animate-pulse'
-          : 'bg-muted text-muted-foreground hover:bg-muted/80'
-      }`}
-      title={isListening ? 'Release to send' : 'Hold to record voice'}
-    >
-      {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-    </button>
+    <div className="relative flex items-center justify-center">
+      {isListening && (
+        <span className="absolute inset-0 rounded-lg animate-pulse-ring" />
+      )}
+      <button
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => {
+          if (recorderRef.current) handleMouseUp();
+        }}
+        className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+          isListening
+            ? 'bg-gradient-to-br from-destructive to-destructive/80 text-destructive-foreground shadow-md shadow-destructive/30 scale-110'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+        }`}
+        title={isListening ? 'Release to send' : 'Hold to record voice'}
+      >
+        {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+      </button>
+    </div>
   );
 }

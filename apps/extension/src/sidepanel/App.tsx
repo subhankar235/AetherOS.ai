@@ -8,6 +8,7 @@ import { CommandBar } from './components/CommandBar';
 import { DraftCard } from './components/DraftCard';
 import { CalendarCard } from './components/CalendarCard';
 import { SettingsPanel } from './components/SettingsPanel';
+import { Sparkles } from 'lucide-react';
 
 export default function App() {
   const {
@@ -39,8 +40,11 @@ export default function App() {
 
   if (isAuthLoading) {
     return (
-      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
-        Loading...
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
+          <Sparkles className="h-6 w-6 text-primary animate-pulse-glow" />
+        </div>
+        <div className="h-3 w-24 rounded animate-shimmer" />
       </div>
     );
   }
@@ -51,11 +55,19 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header wsConnected={wsConnected} />
+      <Header onSettingsClick={() => setShowSettings(true)} />
 
       <div className="flex-1 overflow-y-auto space-y-3 p-3">
-        {activeDraft && <DraftCard draft={activeDraft} />}
-        {activeProposal && <CalendarCard proposal={activeProposal} />}
+        {activeDraft && (
+          <div className="animate-fade-in-up">
+            <DraftCard draft={activeDraft} />
+          </div>
+        )}
+        {activeProposal && (
+          <div className="animate-fade-in-up">
+            <CalendarCard proposal={activeProposal} />
+          </div>
+        )}
         <Transcript />
       </div>
 

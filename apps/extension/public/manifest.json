@@ -6,10 +6,8 @@
   "permissions": [
     "storage",
     "sidePanel",
-    "alarms"
-  ],
-  "optional_permissions": [
-    "audioCapture"
+    "alarms",
+    "identity"
   ],
   "host_permissions": [
     "http://localhost:8000/*",

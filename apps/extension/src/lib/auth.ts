@@ -1,8 +1,6 @@
 import type { AuthState } from './types';
 
-const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 const CLERK_SIGN_IN_URL = `https://${import.meta.env.VITE_CLERK_FRONTEND_API}/sign-in`;
-const REDIRECT_URL = chrome.identity.getRedirectURL('clerk-callback');
 
 const STORAGE_KEY_TOKEN = 'clerk_session_token';
 const STORAGE_KEY_USER = 'clerk_user_info';

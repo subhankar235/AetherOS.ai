@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ActiveDraft } from '../../lib/types';
 import { prepareSendDraft, executeSendDraft } from '../../lib/api-client';
 import { useStore } from '../../lib/stores';
-import { Sparkles, AlertTriangle } from 'lucide-react';
+import { Sparkles, AlertTriangle, Send, X } from 'lucide-react';
 
 interface DraftCardProps {
   draft: ActiveDraft;
@@ -26,56 +26,73 @@ export function DraftCard({ draft }: DraftCardProps) {
   };
 
   return (
-    <div className="rounded-lg border border-primary/60 bg-card p-3 shadow-sm space-y-2">
-      <div className="flex items-center justify-between border-b pb-1.5">
-        <div className="flex items-center gap-1.5">
-          <Sparkles className="h-3.5 w-3.5 text-primary" />
-          <span className="text-[10px] font-semibold text-primary uppercase tracking-wider">
-            AI Reply Draft
+    <div className="group relative overflow-hidden rounded-xl border border-primary/30 bg-gradient-to-b from-card to-primary/[0.02] shadow-sm transition-all hover:border-primary/40 hover:shadow-md">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+
+      <div className="p-3 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <div className="flex h-5 w-5 items-center justify-center rounded-md bg-primary/10">
+              <Sparkles className="h-3 w-3 text-primary" />
+            </div>
+            <span className="text-[10px] font-bold text-primary uppercase tracking-wider">
+              AI Reply Draft
+            </span>
+          </div>
+          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold text-amber-400 border border-amber-500/20">
+            Awaiting Approval
           </span>
         </div>
-        <span className="rounded border border-amber-500/50 px-1.5 py-0 text-[9px] text-amber-600">
-          Awaiting Approval
-        </span>
-      </div>
 
-      {draft.recipient && (
-        <div className="text-xs">
-          <span className="font-medium text-muted-foreground">To:</span>{' '}
-          <span className="font-medium">{draft.recipient}</span>
-        </div>
-      )}
-
-      {draft.has_gaps && (
-        <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 space-y-0.5">
-          <div className="flex items-center gap-1 font-semibold">
-            <AlertTriangle className="h-3 w-3" />
-            <span>Knowledge Gap</span>
+        {draft.recipient && (
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">To:</span>
+            <span className="font-semibold text-foreground/90">{draft.recipient}</span>
           </div>
-          {draft.gap_notes?.map((note, i) => (
-            <p key={i} className="text-[10px] opacity-90">{note}</p>
-          ))}
+        )}
+
+        {draft.has_gaps && draft.gap_notes && draft.gap_notes.length > 0 && (
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 space-y-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-400">
+              <AlertTriangle className="h-3 w-3" />
+              <span>Knowledge Gap</span>
+            </div>
+            {draft.gap_notes.map((note, i) => (
+              <p key={i} className="text-[10px] text-amber-300/70 leading-relaxed">{note}</p>
+            ))}
+          </div>
+        )}
+
+        <div className="max-h-28 overflow-y-auto rounded-lg border border-border bg-muted/30 p-2.5 text-xs leading-relaxed text-foreground/80 whitespace-pre-wrap">
+          {draft.draft_body}
         </div>
-      )}
 
-      <div className="max-h-32 overflow-y-auto rounded border bg-muted/40 p-2 text-xs whitespace-pre-wrap leading-relaxed">
-        {draft.draft_body}
-      </div>
-
-      <div className="flex items-center gap-2 pt-0.5">
-        <button
-          onClick={handleApproveAndSend}
-          disabled={sending}
-          className="flex-1 rounded bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-        >
-          {sending ? 'Sending...' : 'Approve & Send'}
-        </button>
-        <button
-          onClick={() => setActiveDraft(null)}
-          className="rounded p-1.5 text-muted-foreground hover:text-destructive"
-        >
-          <span className="text-xs">✕</span>
-        </button>
+        <div className="flex items-center gap-2 pt-0.5">
+          <button
+            onClick={handleApproveAndSend}
+            disabled={sending}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-primary to-primary/90 px-3 py-2 text-xs font-bold text-primary-foreground shadow-sm transition-all hover:from-primary/90 hover:to-primary/80 hover:shadow-md active:scale-[0.98] disabled:opacity-40 disabled:hover:shadow-none disabled:active:scale-100"
+          >
+            {sending ? (
+              <>
+                <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                Sending...
+              </>
+            ) : (
+              <>
+                <Send className="h-3 w-3" />
+                Approve & Send
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveDraft(null)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+            title="Discard"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
