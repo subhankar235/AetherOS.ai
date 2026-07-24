@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     LLM_FALLBACK_ORDER: str = "openrouter,groq,gemini"
 
-    ELEVENLABS_API_KEY: str = "sk_284d45a4dad81d02043013c390f204ffe38b5e4a80201b2f"
+    ELEVENLABS_API_KEY: Optional[str] = None
     ELEVENLABS_VOICE_ID: str = "Ms9OTvWb99V6DwRHZn6q"
     ELEVENLABS_STT_MODEL: str = "scribe_v2"
     ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
