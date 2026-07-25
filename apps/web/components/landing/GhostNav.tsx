@@ -45,14 +45,9 @@ export default function GhostNav() {
           }`}
         />
         <div className="relative max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
-          <a href="#top" className="flex items-center gap-2.5 group">
-            <div className="relative w-6 h-6">
-              <div className="absolute inset-0 rounded-full bg-cobalt/30 blur-md group-hover:bg-cobalt/50 transition-all" />
-              <div className="relative w-6 h-6 rounded-full border border-cobalt/40 flex items-center justify-center">
-                <div className="w-2 h-2 rounded-full bg-cobalt animate-pulse-glow" />
-              </div>
-            </div>
-            <span className="text-stellar font-medium tracking-tight text-lg">Aether</span>
+          <a href="#top" className="flex items-center gap-2 group">
+            <img src="/logo.svg" alt="Aether" className="h-12 w-auto transition-transform duration-300 group-hover:scale-105" />
+            <span className="text-blue-200 font-semibold text-2xl transition-colors duration-300 group-hover:text-white">Aether</span>
           </a>
 
           <div className="hidden md:flex items-center gap-1">

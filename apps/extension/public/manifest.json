@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Aether — AI Email Assistant",
+  "version": "1.0.0",
+  "description": "AI Chief of Staff for your inbox — triage, draft replies, schedule meetings, and research companies.",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "alarms",
+    "identity"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "https://*.clerk.accounts.dev/*",
+    "https://api.clerk.com/*"
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Aether — Open Assistant",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
