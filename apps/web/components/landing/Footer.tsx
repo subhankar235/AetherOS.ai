@@ -55,12 +55,7 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2">
             <div className="flex items-center gap-2.5 mb-4">
-              <div className="relative w-6 h-6">
-                <div className="absolute inset-0 rounded-full bg-cobalt/30 blur-md" />
-                <div className="relative w-6 h-6 rounded-full border border-cobalt/40 flex items-center justify-center">
-                  <div className="w-2 h-2 rounded-full bg-cobalt" />
-                </div>
-              </div>
+              <img src="/logo.svg" alt="Aether" className="h-7 w-auto" />
               <span className="text-stellar font-medium text-lg">Aether</span>
             </div>
             <p className="text-xs text-mercury/50 leading-relaxed max-w-[200px]">

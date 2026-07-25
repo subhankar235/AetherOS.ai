@@ -83,8 +83,8 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div className="flex items-center gap-3 px-3 py-2 group-data-[state=collapsed]/sidebar:justify-center group-data-[state=collapsed]/sidebar:gap-0 group-data-[state=collapsed]/sidebar:px-0 group-data-[state=collapsed]/sidebar:py-0">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Sparkles className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+            <img src="/logo.svg" alt="Aether" className="h-7 w-auto" />
           </div>
           <div className="flex flex-col leading-tight group-data-[state=collapsed]/sidebar:hidden">
             <span className="text-sm font-semibold">Aether</span>
