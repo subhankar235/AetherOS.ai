@@ -157,6 +157,15 @@
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  body {
+    cursor: none;
+  }
+  body * {
+    cursor: none !important;
+  }
+}
+
 @utility text-gradient-stellar {
   background: linear-gradient(180deg, #f9fafb 0%, #6b7280 100%);
   -webkit-background-clip: text;

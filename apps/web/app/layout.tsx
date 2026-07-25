@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "@/styles/globals.css";
+import CustomCursor from "@/components/ui/CustomCursor";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -40,7 +41,10 @@ export default function RootLayout({
         suppressHydrationWarning
         data-scroll-behavior="smooth"
       >
-        <body className="min-h-screen font-sans antialiased">{children}</body>
+        <body className="min-h-screen font-sans antialiased">
+          {children}
+          <CustomCursor />
+        </body>
       </html>
     </ClerkProvider>
   );
