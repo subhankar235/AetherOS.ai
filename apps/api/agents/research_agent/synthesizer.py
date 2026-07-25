@@ -59,41 +59,103 @@ async def synthesize_report(
     llm: Optional[ChatOpenAI] = None,
 ) -> ResearchReport:
     """Synthesize crawl results into a structured report with SWOT and similarity check."""
-    if llm is None:
-        llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.2,
-            api_key=settings.OPENAI_API_KEY,
-        )
-
     context = _build_context(company, crawl_results)
     source_texts = _extract_source_texts(crawl_results)
 
-    structured = llm.with_structured_output(ResearchReport)
-    try:
-        result = await structured.ainvoke([
-            {"role": "system", "content": SYNTHESIS_PROMPT},
-            {"role": "user", "content": context},
-        ])
-        result.report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        logger.info(f"Synthesized research report for '{company}'")
+    # Build list of LLMs to try (cascading fallback)
+    llms_to_try: list[ChatOpenAI] = []
+    if llm is not None:
+        llms_to_try.append(llm)
+    else:
+        from core.llm_factory import get_provider_candidates
+        for cand in get_provider_candidates(is_classifier=False):
+            kwargs = {
+                "model": cand["model"],
+                "temperature": 0.2,
+                "api_key": cand["api_key"],
+            }
+            if cand.get("base_url"):
+                kwargs["base_url"] = cand["base_url"]
+            llms_to_try.append(ChatOpenAI(**kwargs))
 
-        # Post-generation similarity check (PRD 5.12)
-        _check_similarity(result, source_texts)
+    last_exc = None
+    for candidate_llm in llms_to_try:
+        # Attempt 1: structured output (function calling)
+        try:
+            structured = candidate_llm.with_structured_output(ResearchReport)
+            result = await structured.ainvoke([
+                {"role": "system", "content": SYNTHESIS_PROMPT},
+                {"role": "user", "content": context},
+            ])
+            result.report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            logger.info(f"Synthesized research report for '{company}' via structured output")
+            _check_similarity(result, source_texts)
+            return result
+        except Exception as exc:
+            logger.warning(f"Structured output synthesis failed: {exc}. Trying plain text fallback...")
+            last_exc = exc
 
-        return result
-    except Exception as exc:
-        logger.exception(f"Report synthesis failed: {exc}")
-        return ResearchReport(
-            executive_summary=f"Failed to synthesize full report for {company}.",
-            company_overview="No data found.",
-            swot_analysis="No data found.",
-            competitors="No data found.",
-            recent_news="No data found.",
-            opportunities="No data found.",
-            risks="No data found.",
-            report_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        )
+        # Attempt 2: plain text invoke + manual JSON parsing
+        try:
+            import json as _json
+            plain_prompt = SYNTHESIS_PROMPT + """
+
+IMPORTANT: Return your response as a valid JSON object with these exact keys:
+{
+  "executive_summary": "...",
+  "company_overview": "...",
+  "swot_analysis": "Strengths: ... Weaknesses: ... Opportunities: ... Threats: ...",
+  "competitors": "...",
+  "recent_news": "...",
+  "opportunities": "...",
+  "risks": "...",
+  "report_date": "YYYY-MM-DD"
+}
+
+Return ONLY the JSON object, no markdown fences or extra text."""
+
+            response = await candidate_llm.ainvoke([
+                {"role": "system", "content": plain_prompt},
+                {"role": "user", "content": context},
+            ])
+            text = response.content.strip()
+            # Try to extract JSON from the response
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+
+            data = _json.loads(text)
+            result = ResearchReport(
+                executive_summary=data.get("executive_summary", "No data found."),
+                company_overview=data.get("company_overview", "No data found."),
+                swot_analysis=data.get("swot_analysis", "No data found."),
+                competitors=data.get("competitors", "No data found."),
+                recent_news=data.get("recent_news", "No data found."),
+                opportunities=data.get("opportunities", "No data found."),
+                risks=data.get("risks", "No data found."),
+                report_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            )
+            logger.info(f"Synthesized research report for '{company}' via plain text fallback")
+            _check_similarity(result, source_texts)
+            return result
+        except Exception as exc2:
+            logger.warning(f"Plain text synthesis also failed: {exc2}. Trying next provider...")
+            last_exc = exc2
+
+    logger.exception(f"All synthesis attempts failed for '{company}': {last_exc}")
+    return ResearchReport(
+        executive_summary=f"Failed to synthesize full report for {company}.",
+        company_overview="No data found.",
+        swot_analysis="No data found.",
+        competitors="No data found.",
+        recent_news="No data found.",
+        opportunities="No data found.",
+        risks="No data found.",
+        report_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    )
+
 
 
 def _build_context(

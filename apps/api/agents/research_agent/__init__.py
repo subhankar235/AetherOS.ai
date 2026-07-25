@@ -65,9 +65,16 @@ async def run_research(
     report = await synthesize_report(company, crawl_results)
 
     result = _build_result(company, report)
-    await _write_cache(company, context, result)
+
+    # Only cache successful results — don't cache synthesis failures
+    is_failed = result.get("result", {}).get("executive_summary", "").startswith("Failed to synthesize")
+    if not is_failed:
+        await _write_cache(company, context, result)
+    else:
+        logger.warning(f"Skipping cache write for '{company}' — synthesis failed")
 
     return result
+
 
 
 def _build_result(company: str, report) -> dict[str, Any]:
