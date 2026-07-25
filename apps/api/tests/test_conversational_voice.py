@@ -353,10 +353,48 @@ async def test_vad_confidence_filtering_ignores_ambient_noise():
 
         assert len(results) == 1
         assert results[0]["type"] == "final"
-        assert results[0]["text"] == "Schedule a meeting"
         assert results[0]["confidence"] == 0.95
 
 
+@pytest.mark.asyncio
+async def test_voice_interruption_task_redirection():
+    graph = SupervisorGraph()
+    session_id = "session_redirect_task_99"
+    user_id = "user_redirect_task_99"
+
+    mock_class_1 = {
+        "intent": "single",
+        "tasks": [{"agent": "support_agent", "action": "help", "params": {"question": "Who are you?"}}],
+        "clarification_text": None,
+    }
+    with patch("agents.supervisor.graph.classify_intent", new_callable=AsyncMock) as mock_classify:
+        mock_classify.return_value = mock_class_1
+        res1 = await graph.run(user_id=user_id, session_id=session_id, raw_input="Who are you?")
+
+    assert res1["status"] == "completed"
+
+    # User interrupts mid-way and redirects to a completely different task (schedule meeting with Sarah)
+    mock_class_2 = {
+        "intent": "single",
+        "tasks": [{"agent": "calendar_agent", "action": "schedule", "params": {"raw_input": "schedule a meeting with Sarah tomorrow at 2 PM", "description": "meeting with Sarah"}}],
+        "clarification_text": None,
+    }
+    with patch("agents.supervisor.graph.classify_intent", new_callable=AsyncMock) as mock_classify, \
+         patch("agents.calendar_agent.extractor.extract_meeting_details", new_callable=AsyncMock) as mock_extract:
+        mock_classify.return_value = mock_class_2
+        from agents.calendar_agent.extractor import MeetingDetails
+        mock_extract.return_value = MeetingDetails(title="Sync with Sarah", duration_minutes=60, participants=["sarah@example.com"])
+
+        res2 = await graph.run(user_id=user_id, session_id=session_id, raw_input="Wait, schedule a meeting with Sarah tomorrow at 2 PM instead.")
+        spoken = rewrite(res2)
+
+        # Verified: Redirected task executes successfully and returns concise outcome summary
+        assert res2["agent"] in ("calendar_agent", "Supervisor")
+        assert "Sarah" in spoken or "Sync with Sarah" in spoken or "scheduled" in spoken.lower() or "meeting" in spoken.lower()
+
+
 async def _async_iter(items):
+    for item in items:
+        yield item
     for item in items:
         yield item

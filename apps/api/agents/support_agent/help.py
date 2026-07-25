@@ -113,14 +113,27 @@ async def answer_question(
     llm: Optional[ChatOpenAI] = None,
 ) -> dict[str, Any]:
     lowered = question.lower().strip()
-    neg_ack_kws = ["don't read", "dont read", "no need to read", "don't read it", "dont read it", "skip that", "never mind", "no thanks", "no problem", "that's fine", "its fine", "it's fine"]
-    if any(kw in lowered for kw in neg_ack_kws):
+    neg_ack_kws = [
+        "don't read", "dont read", "no need to read", "don't read it", "dont read it",
+        "skip that", "never mind", "no thanks", "no problem", "that's fine", "its fine", "it's fine",
+        "stop", "stop please", "stop it", "cancel", "cancel that", "be quiet", "shut up",
+        "enough", "that's enough", "thats enough", "okay stop", "ok stop",
+        "not now", "leave it", "forget it", "forget that", "no need", "nah",
+        "i don't need", "i dont need", "no don't", "no dont",
+    ]
+    if any(kw == lowered or kw == lowered.rstrip(".!") for kw in neg_ack_kws) or any(kw in lowered for kw in neg_ack_kws):
+        # Choose contextually appropriate stop response
+        stop_kws = ["stop", "cancel", "enough", "be quiet", "shut up", "okay stop", "ok stop"]
+        if any(kw in lowered for kw in stop_kws) or lowered.rstrip(".!") in stop_kws:
+            reply_text = "Okay, stopped."
+        else:
+            reply_text = "No problem."
         return {
             "agent": "support_agent",
             "status": "completed",
             "result": {
-                "answer": "No problem.",
-                "message": "No problem.",
+                "answer": reply_text,
+                "message": reply_text,
                 "sources": [],
                 "classification": "acknowledgment",
             },

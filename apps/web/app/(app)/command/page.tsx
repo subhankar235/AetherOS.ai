@@ -439,22 +439,24 @@ export default function CommandCenter() {
     setListening(false);
   };
 
+  const speakingTextRef = useRef("");
+
   // Speak text aloud via ElevenLabs TTS API, with browser fallback
-  // Microphones are PAUSED during TTS playback to prevent self-transcription
+  // Enables simultaneous listening so user can interrupt ("barge-in") mid-speech
   const speakText = async (text: string, onDone?: () => void) => {
     if (typeof window === 'undefined') {
       onDone?.();
       return;
     }
-    // Cancel existing speech and pause microphone to prevent speaker audio feedback
+    // Cancel existing speech
     cancelSpeech();
-    pauseMicrophone();
     setSpeaking(true);
+    speakingTextRef.current = text.toLowerCase().trim();
 
     const handleSpeechFinished = () => {
       setSpeaking(false);
+      speakingTextRef.current = "";
       onDone?.();
-      // Flow: Respond → Return to idle listening
       if (callActiveRef.current) {
         startListeningRound();
       }
@@ -489,10 +491,16 @@ export default function CommandCenter() {
       if (!callActiveRef.current) {
         URL.revokeObjectURL(audioUrl);
         setSpeaking(false);
+        speakingTextRef.current = "";
         return;
       }
 
       await audio.play();
+
+      // START LISTENING DURING SPEECH for instant interruption / barge-in
+      if (callActiveRef.current) {
+        startListeningRound();
+      }
     } catch (err) {
       console.warn('ElevenLabs TTS failed, falling back to browser speech:', err);
       if (window.speechSynthesis) {
@@ -510,24 +518,30 @@ export default function CommandCenter() {
           handleSpeechFinished();
         };
         window.speechSynthesis.speak(utterance);
+        if (callActiveRef.current) {
+          startListeningRound();
+        }
       } else {
         handleSpeechFinished();
       }
     }
   };
 
-  // Start SpeechRecognition with Voice Activity Detection (VAD), silence detection (~750ms), and confidence filtering
+  // Start SpeechRecognition with Voice Activity Detection (VAD), silence detection (~750ms), and interruption handling
   const startListeningRound = () => {
     if (typeof window === 'undefined') return;
     if (!callActiveRef.current) return;
-    if (speaking) return; // Do not start mic while assistant is speaking
     if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) return;
 
     const gen = ++recognitionGenRef.current;
 
-    pauseMicrophone();
+    clearSilenceTimer();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
 
-    // Acquire MediaStream with noise suppression, echo cancellation, and auto gain control
+    // Acquire MediaStream with echo cancellation, noise suppression, and auto gain control
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({
         audio: {
@@ -567,7 +581,6 @@ export default function CommandCenter() {
         const alternative = res[0];
         if (alternative && alternative.transcript) {
           const confidence = alternative.confidence ?? 1.0;
-          // Filter low-confidence noise (< 0.35) while preserving real speech
           if (confidence >= 0.35 || res.isFinal) {
             textChunk += " " + alternative.transcript;
           }
@@ -576,6 +589,18 @@ export default function CommandCenter() {
 
       if (textChunk.trim()) {
         finalTranscriptText = (capturedTranscript + " " + textChunk).trim();
+        
+        // INTERRUPTION / BARGE-IN DETECTION:
+        // If assistant is currently speaking and user speaks a non-echo command ("No need to read it", "Stop", etc.)
+        if (speakingTextRef.current) {
+          const userLower = finalTranscriptText.toLowerCase();
+          const assistantLower = speakingTextRef.current;
+          // Check if user input is not identical to assistant's own TTS output
+          if (!assistantLower.includes(userLower) && userLower.length > 2) {
+            console.info("User interruption detected while assistant was speaking. Halting playback immediately.");
+            cancelSpeech(); // Stop speech immediately!
+          }
+        }
       }
 
       // VAD Silence Detection: Automatically stop and process command after ~800ms of silence
