@@ -51,11 +51,25 @@ async def plan_research(
     llm: Optional[ChatOpenAI] = None,
 ) -> ResearchPlan:
     if llm is None:
-        llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.1,
-            api_key=settings.OPENAI_API_KEY,
-        )
+        from core.llm_factory import get_provider_candidates
+        candidates = get_provider_candidates(is_classifier=True)
+        if candidates:
+            cand = candidates[0]
+            kwargs = {
+                "model": cand["model"],
+                "temperature": 0.1,
+                "api_key": cand["api_key"],
+            }
+            if cand.get("base_url"):
+                kwargs["base_url"] = cand["base_url"]
+            llm = ChatOpenAI(**kwargs)
+        else:
+            llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                temperature=0.1,
+                api_key=settings.OPENAI_API_KEY,
+            )
+
 
     disambiguation = await _check_ambiguity(company, context, llm)
     if disambiguation.is_ambiguous:

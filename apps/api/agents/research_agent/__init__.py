@@ -42,6 +42,7 @@ async def run_research(
             "result": {
                 "executive_summary": f"Research could not be planned for '{company}'.",
                 "company_overview": "No data found.",
+                "swot_analysis": "No data found.",
                 "competitors": "No data found.",
                 "recent_news": "No data found.",
                 "opportunities": "No data found.",
@@ -64,9 +65,16 @@ async def run_research(
     report = await synthesize_report(company, crawl_results)
 
     result = _build_result(company, report)
-    await _write_cache(company, context, result)
+
+    # Only cache successful results — don't cache synthesis failures
+    is_failed = result.get("result", {}).get("executive_summary", "").startswith("Failed to synthesize")
+    if not is_failed:
+        await _write_cache(company, context, result)
+    else:
+        logger.warning(f"Skipping cache write for '{company}' — synthesis failed")
 
     return result
+
 
 
 def _build_result(company: str, report) -> dict[str, Any]:
@@ -76,6 +84,7 @@ def _build_result(company: str, report) -> dict[str, Any]:
         "result": {
             "executive_summary": report.executive_summary,
             "company_overview": report.company_overview,
+            "swot_analysis": report.swot_analysis,
             "competitors": report.competitors,
             "recent_news": report.recent_news,
             "opportunities": report.opportunities,

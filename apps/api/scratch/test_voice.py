@@ -11,14 +11,18 @@ def load_env():
     """
     # The environment file lives in the **api** directory (one level up from this script)
     api_dir = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     env_path_local = api_dir / ".env.local"
     env_path_default = api_dir / ".env"
+    env_path_root = repo_root / ".env"
     if env_path_local.is_file():
         env_path = env_path_local
     elif env_path_default.is_file():
         env_path = env_path_default
+    elif env_path_root.is_file():
+        env_path = env_path_root
     else:
-        print(f"[ERROR] Neither .env.local nor .env found in {api_dir}")
+        print(f"[ERROR] No .env found in {api_dir} or {repo_root}")
         sys.exit(1)
     load_dotenv(dotenv_path=env_path)
     # Gather required variables for both STT and TTS
@@ -47,10 +51,9 @@ def run_stt(client, stt_model):
     print(response)
 
 def run_tts(client, voice_id, tts_model):
-    """Convert a test string to speech and write the audio to scratch/output.mp3.
-    Handles free‑tier voice restrictions gracefully.
-    """
+    """Convert a test string to speech and write the audio to scratch/output.mp3."""
     text = "Hello from AetherOS. This is a backend integration test."
+    print(f"Testing TTS with voice_id: '{voice_id}', model: '{tts_model}'...")
     try:
         response = client.text_to_speech.convert(
             voice_id=voice_id,
@@ -59,25 +62,15 @@ def run_tts(client, voice_id, tts_model):
         )
         used_voice = voice_id
     except Exception as e:
-        # Detect payment‑required error (status 402) or message indicating a paid‑tier voice
-        status = getattr(e, "status_code", None)
-        msg = str(e)
-        if status == 402 or "paid_plan_required" in msg:
-            fallback_voice = "Adam"
-            print("[WARN] Paid‑tier voice not available. Falling back to free voice 'Adam'.")
-            try:
-                response = client.text_to_speech.convert(
-                    voice_id=fallback_voice,
-                    model_id=tts_model,
-                    text=text,
-                )
-                used_voice = fallback_voice
-            except Exception as inner_err:
-                print(f"[ERROR] Unable to generate speech with fallback voice: {inner_err}")
-                sys.exit(1)
-        else:
-            print(f"[ERROR] ElevenLabs API error: {e}")
-            sys.exit(1)
+        print(f"[ERROR] TTS Conversion failed for voice_id '{voice_id}': {e}")
+        # Try fetching account voices to see if voice_id is valid
+        try:
+            voices_res = client.voices.get_all()
+            available_ids = [v.voice_id for v in voices_res.voices]
+            print(f"Available voices on your account ({len(available_ids)}): {available_ids[:5]}")
+        except Exception as v_err:
+            print(f"Could not list voices: {v_err}")
+        sys.exit(1)
 
     # Determine output path (scratch folder at repo root)
     repo_root = Path(__file__).resolve().parents[3]
@@ -86,7 +79,7 @@ def run_tts(client, voice_id, tts_model):
     out_path = out_dir / "output.mp3"
     with open(out_path, "wb") as f:
         f.write(b"".join(response))
-    print("✅ Success: audio generated and saved.")
+    print("[SUCCESS] audio generated and saved.")
     print(f"Output location : {out_path}")
     print(f"Voice ID used   : {used_voice}")
     print(f"Model used      : {tts_model}")

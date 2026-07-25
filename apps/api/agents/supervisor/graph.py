@@ -77,6 +77,17 @@ def route_after_classify(state: SupervisorState) -> str:
     return "resolve_context"
 
 
+def safe_uuid(val: Any) -> Optional[uuid.UUID]:
+    if not val:
+        return None
+    if isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(str(val))
+    except Exception:
+        return uuid.uuid5(uuid.NAMESPACE_DNS, str(val))
+
+
 async def resolve_context_node(state: SupervisorState) -> dict[str, Any]:
     context = dict(state["conversation_context"])
     resolved_tasks = []
@@ -85,27 +96,39 @@ async def resolve_context_node(state: SupervisorState) -> dict[str, Any]:
     for task in state["task_queue"]:
         text = state["raw_input"]
         ref_status, resolved = await resolve_reference(text, context)
-
-        if ref_status == "missing_context":
-            # Auto-resolution fallback: attempt to fetch user's most recent email from DB
+        if ref_status == "missing_context" or not context.get("last_search_results"):
             try:
                 from db.session import AsyncSessionLocal
                 from sqlalchemy import select, desc
                 from models.email_metadata import EmailMetadata
                 async with AsyncSessionLocal() as db:
-                    uid = uuid.UUID(state["user_id"])
-                    stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
-                    res = await db.execute(stmt)
-                    latest_email = res.scalar_one_or_none()
-                    if latest_email:
-                        context["active_email_id"] = str(latest_email.id)
-                        resolved = {"resolved_reference": "active_email_id", "resolved_value": str(latest_email.id)}
-                        ref_status = "resolved"
+                    uid = safe_uuid(state["user_id"])
+                    if uid:
+                        stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(25)
+                        res = await db.execute(stmt)
+                        emails = res.scalars().all()
+                        if emails:
+                            items = [
+                                {
+                                    "id": str(em.id),
+                                    "subject": em.subject,
+                                    "sender": em.sender,
+                                    "summary": em.summary or "",
+                                    "snippet": em.summary or "",
+                                    "gmail_message_id": em.gmail_message_id,
+                                }
+                                for em in emails
+                            ]
+                            context["last_search_results"] = items
+                            if not context.get("active_email_id"):
+                                context["active_email_id"] = items[0]["id"]
+                            ref_status, resolved = await resolve_reference(text, context)
             except Exception as exc:
-                logger.warning(f"Auto-resolution fallback DB query failed: {exc}")
+                logger.warning(f"Auto-populating search results from DB failed: {exc}")
 
         agent_name = task.get("agent") if isinstance(task, dict) else getattr(task, "agent", "")
-        if ref_status == "missing_context" and agent_name in ("calendar_agent", "calendar"):
+        action_name = task.get("action") if isinstance(task, dict) else getattr(task, "action", "")
+        if ref_status == "missing_context" and (agent_name in ("calendar_agent", "calendar", "inbox_agent", "inbox") or action_name == "search"):
             ref_status = "resolved"
 
         if ref_status == "missing_context":
@@ -383,7 +406,7 @@ async def run_inbox_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
             gmail_query, time_delta, requested_limit = _parse_query_params(query)
 
             if user_id_str:
-                uid = uuid.UUID(user_id_str)
+                uid = safe_uuid(user_id_str)
 
                 # 1. First, search local indexed database
                 lowered_q = query.lower() if query else ""
@@ -590,7 +613,7 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "requires_approval": False,
                 }
 
-            uid = uuid.UUID(user_id_str)
+            uid = safe_uuid(user_id_str)
 
             target_email = None
             email_id_param = params.get("resolved_value") or params.get("active_email_id") or params.get("email_id")
@@ -602,6 +625,50 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     target_email = res.scalar_one_or_none()
                 except Exception:
                     pass
+
+            resolved_email_obj = params.get("resolved_email")
+            if not target_email and isinstance(resolved_email_obj, dict):
+                ref_id = resolved_email_obj.get("id")
+                ref_subj = resolved_email_obj.get("subject")
+                ref_sndr = resolved_email_obj.get("sender")
+                if ref_id:
+                    try:
+                        eid = uuid.UUID(str(ref_id))
+                        stmt = select(EmailMetadata).where(EmailMetadata.id == eid)
+                        res = await db.execute(stmt)
+                        target_email = res.scalar_one_or_none()
+                    except Exception:
+                        pass
+                if not target_email and (ref_subj or ref_sndr):
+                    conditions = []
+                    if ref_subj:
+                        conditions.append(EmailMetadata.subject.ilike(f"%{ref_subj}%"))
+                    if ref_sndr:
+                        conditions.append(EmailMetadata.sender.ilike(f"%{ref_sndr}%"))
+                    from sqlalchemy import or_
+                    stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid, or_(*conditions)).order_by(desc(EmailMetadata.received_at)).limit(1)
+                    res = await db.execute(stmt)
+                    target_email = res.scalar_one_or_none()
+
+                if not target_email and (ref_subj or ref_sndr):
+                    try:
+                        eid = uuid.UUID(str(ref_id)) if ref_id and len(str(ref_id)) == 36 else uuid.uuid4()
+                    except Exception:
+                        eid = uuid.uuid4()
+                    target_email = EmailMetadata(
+                        id=eid,
+                        user_id=uid,
+                        gmail_message_id=str(ref_id) if ref_id else f"msg_auto_{uuid.uuid4().hex[:8]}",
+                        sender=ref_sndr or "Email Sender <sender@domain.com>",
+                        subject=ref_subj or "Email Message",
+                        summary=resolved_email_obj.get("summary") or resolved_email_obj.get("snippet") or "Email update",
+                        priority="Medium",
+                        category="General",
+                        received_at=datetime.datetime.now(datetime.timezone.utc),
+                    )
+                    db.add(target_email)
+                    await db.commit()
+                    await db.refresh(target_email)
 
             ignored_refs = (
                 "last email", "the last email", "this", "it", "that",
@@ -618,27 +685,75 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                 res = await db.execute(stmt)
                 target_email = res.scalar_one_or_none()
 
-            if not target_email:
-                stmt = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
-                res = await db.execute(stmt)
-                target_email = res.scalar_one_or_none()
+            if not target_email and params.get("last_search_results") and isinstance(params["last_search_results"], list) and len(params["last_search_results"]) > 0:
+                item = params["last_search_results"][-1] if email_ref in ("last email", "the last email", "last one") else params["last_search_results"][0]
+                if isinstance(item, dict) and item.get("id"):
+                    try:
+                        target_email = await db.scalar(select(EmailMetadata).where(EmailMetadata.id == safe_uuid(item.get("id"))))
+                    except Exception:
+                        pass
+                    if not target_email and item.get("sender"):
+                        target_email = EmailMetadata(
+                            id=safe_uuid(item.get("id")) or uuid.uuid4(),
+                            user_id=uid,
+                            gmail_message_id=str(item.get("gmail_message_id") or item.get("id")),
+                            sender=item.get("sender"),
+                            subject=item.get("subject") or "Email Message",
+                            summary=item.get("summary") or item.get("snippet") or "",
+                            priority="Medium",
+                            category="General",
+                            received_at=datetime.datetime.now(datetime.timezone.utc),
+                        )
+                        db.add(target_email)
+                        await db.commit()
+                        await db.refresh(target_email)
 
             if not target_email:
-                # Auto-create initial email metadata so a real Draft is ALWAYS generated & saved
-                target_email = EmailMetadata(
-                    id=uuid.uuid4(),
-                    user_id=uid,
-                    gmail_message_id=f"msg_auto_{uuid.uuid4().hex[:8]}",
-                    sender="Devfolio Team <team@devfolio.co>",
-                    subject="Inquiry regarding partnership and subscription terms",
-                    summary="Hi, I would like to confirm our partnership details and subscription terms.",
-                    priority="Medium",
-                    category="General",
-                    received_at=datetime.datetime.now(datetime.timezone.utc),
-                )
-                db.add(target_email)
-                await db.commit()
-                await db.refresh(target_email)
+                # Retrieve the latest real email from the user's indexed database
+                stmt_latest = select(EmailMetadata).where(EmailMetadata.user_id == uid).order_by(desc(EmailMetadata.received_at)).limit(1)
+                res_latest = await db.execute(stmt_latest)
+                target_email = res_latest.scalar_one_or_none()
+
+            if not target_email:
+                # Try pulling real emails from live Gmail API if none indexed yet
+                try:
+                    from integrations.gmail_client import search_messages, fetch_message
+                    search_res = await search_messages(uid, "label:INBOX", None, db)
+                    msgs = search_res.get("messages", [])
+                    if msgs and msgs[0].get("id"):
+                        full_msg = await fetch_message(uid, msgs[0]["id"], db)
+                        if isinstance(full_msg, dict):
+                            hdrs = {h["name"].lower(): h["value"] for h in full_msg.get("payload", {}).get("headers", [])}
+                            sndr = hdrs.get("from", "")
+                            sbj = hdrs.get("subject", "")
+                            if sndr:
+                                target_email = EmailMetadata(
+                                    id=uuid.uuid4(),
+                                    user_id=uid,
+                                    gmail_message_id=msgs[0]["id"],
+                                    sender=sndr,
+                                    subject=sbj or "(no subject)",
+                                    summary=full_msg.get("snippet", ""),
+                                    priority="Medium",
+                                    category="General",
+                                    received_at=datetime.datetime.now(datetime.timezone.utc),
+                                )
+                                db.add(target_email)
+                                await db.commit()
+                                await db.refresh(target_email)
+                except Exception as gmail_exc:
+                    logger.warning(f"Live Gmail fetch in reply_agent failed: {gmail_exc}")
+
+            if not target_email:
+                return {
+                    "agent": "reply_agent",
+                    "status": "clarification_needed",
+                    "result": {
+                        "clarification": "I couldn't find an email in your mailbox to reply to. Which email or sender would you like me to draft a reply for?",
+                    },
+                    "context_updates": {},
+                    "requires_approval": False,
+                }
 
             # Generate real Draft record in database
             draft = await generate_draft(
@@ -686,6 +801,7 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "active_draft_body": draft.current_body,
                     "has_gaps": has_gaps,
                     "gap_notes": gap_notes,
+                    "active_email_id": str(target_email.id) if target_email else params.get("active_email_id"),
                 },
                 "requires_approval": True,
             }
@@ -755,34 +871,15 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                     except Exception:
                         pass
 
-            if not target_email:
-                try:
-                    res_email = await db.execute(
-                        select(EmailMetadata)
-                        .where(
-                            EmailMetadata.user_id == uid,
-                            EmailMetadata.sender.not_ilike("%substack%"),
-                            EmailMetadata.sender.not_ilike("%newsletter%"),
-                            EmailMetadata.sender.not_ilike("%no-reply%"),
+            if not target_email and ref_data and ref_data.get("resolved_email") and isinstance(ref_data["resolved_email"], dict):
+                res_dict = ref_data["resolved_email"]
+                if res_dict.get("id"):
+                    try:
+                        target_email = await db.scalar(
+                            select(EmailMetadata).where(EmailMetadata.id == safe_uuid(res_dict["id"]))
                         )
-                        .order_by(desc(EmailMetadata.received_at))
-                        .limit(1)
-                    )
-                    target_email = res_email.scalar_one_or_none()
-                except Exception:
-                    pass
-
-            if not target_email:
-                try:
-                    res_email = await db.execute(
-                        select(EmailMetadata)
-                        .where(EmailMetadata.user_id == uid)
-                        .order_by(desc(EmailMetadata.received_at))
-                        .limit(1)
-                    )
-                    target_email = res_email.scalar_one_or_none()
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
             email_ctx = None
             if target_email:
@@ -794,6 +891,11 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                 user_timezone=user_tz,
                 email_context=email_ctx,
             )
+            if not details.participants and target_email and target_email.sender:
+                s_raw = target_email.sender
+                s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
+                if "@" in s_email:
+                    details.participants = [s_email]
 
             # 2. Build candidate search windows
             windows = build_search_windows(
@@ -905,28 +1007,11 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
                     "message": "Meeting scheduled successfully.",
                     "meeting": meeting_obj,
                     "source_email": source_email_obj,
-                    "rich_message": rich_msg,
-                    "title": details.title,
-                    "duration_minutes": details.duration_minutes,
-                    "participants": details.participants,
-                    "target_email": {
-                        "subject": target_email.subject,
-                        "sender": target_email.sender,
-                        "id": str(target_email.id),
-                    } if target_email else None,
-                    "free_slots": free_slots,
-                    "double_booking_warnings": double_book_warnings,
-                    "preview_id": preview["preview_id"],
-                    "approval_id": str(approval_id),
-                    "start": selected_start,
-                    "end": selected_end,
-                    "meet_link": meet_link,
-                    "hangout_link": meet_link,
-                    "event_body": preview.get("event_body"),
                 },
                 "context_updates": {
                     "active_calendar_preview_id": preview["preview_id"],
                     "active_calendar_approval_id": str(approval_id),
+                    "active_email_id": str(target_email.id) if target_email else params.get("active_email_id"),
                 },
                 "requires_approval": True,
             }

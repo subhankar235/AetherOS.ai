@@ -90,3 +90,8 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Scratch & Audio
+scratch/
+apps/api/scratch/
+*.mp3

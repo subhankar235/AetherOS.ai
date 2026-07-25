@@ -285,15 +285,24 @@ async def confirm_event(
         raw_emails = []
         for att in raw_attendees:
             email_str = att["email"] if isinstance(att, dict) and att.get("email") else str(att)
+            if "<" in email_str and ">" in email_str:
+                email_str = email_str.split("<")[1].replace(">", "").strip()
             if is_valid_sendable_email(email_str) and email_str not in raw_emails:
                 raw_emails.append(email_str)
 
-        if not source_email_id and preview_id:
+        if preview_id:
             try:
                 meeting_uuid = uuid.UUID(preview_id)
                 m_rec = await db.get(Meeting, meeting_uuid)
-                if m_rec and m_rec.source_email_id:
-                    source_email_id = m_rec.source_email_id
+                if m_rec:
+                    if not source_email_id and m_rec.source_email_id:
+                        source_email_id = m_rec.source_email_id
+                    for p in (m_rec.participants or []):
+                        p_str = p.get("email") or p.get("displayName") if isinstance(p, dict) else str(p)
+                        if "<" in p_str and ">" in p_str:
+                            p_str = p_str.split("<")[1].replace(">", "").strip()
+                        if is_valid_sendable_email(p_str) and p_str not in raw_emails:
+                            raw_emails.append(p_str)
             except Exception:
                 pass
 
@@ -308,34 +317,14 @@ async def confirm_event(
             except Exception:
                 pass
 
-        if user_email and is_valid_sendable_email(user_email) and user_email not in raw_emails:
-            raw_emails.append(user_email)
-
-        # Fallback: if still no valid sendable email, check recent real EmailMetadata sender
-        if not raw_emails:
-            try:
-                res_ems = await db.scalars(
-                    select(EmailMetadata)
-                    .where(EmailMetadata.user_id == user_id)
-                    .order_by(EmailMetadata.received_at.desc())
-                    .limit(10)
-                )
-                for em_cand in res_ems:
-                    if em_cand.sender:
-                        s_raw = em_cand.sender
-                        s_email = s_raw.split("<")[1].replace(">", "").strip() if "<" in s_raw and ">" in s_raw else s_raw.strip()
-                        if is_valid_sendable_email(s_email) and s_email not in raw_emails:
-                            raw_emails.append(s_email)
-                            break
-            except Exception:
-                pass
-
-        attendee_emails = raw_emails
+        attendee_emails = [e for e in raw_emails if is_valid_sendable_email(e)]
+        if user_email and is_valid_sendable_email(user_email) and user_email not in attendee_emails:
+            attendee_emails.append(user_email)
 
         if attendee_emails:
             subject_title = event_body.get("summary", "Calendar Meeting")
-            start_str = event_body.get("start", {}).get("dateTime", "")
-            end_str = event_body.get("end", {}).get("dateTime", "")
+            start_str = event_body.get("start", {}).get("dateTime") or event_body.get("start", {}).get("date") or ""
+            end_str = event_body.get("end", {}).get("dateTime") or event_body.get("end", {}).get("date") or ""
             invitation_body = (
                 f"Hello,\n\n"
                 f"You have been invited to a calendar event: '{subject_title}'.\n\n"
@@ -348,7 +337,7 @@ async def confirm_event(
                 try:
                     await send_message(user_id, att_email, f"Invitation: {subject_title}", invitation_body, None, db)
                     invitation_sent = True
-                    logger.info(f"Successfully sent meeting invitation email to {att_email}")
+                    logger.info(f"Successfully sent meeting invitation email to participant {att_email}")
                 except Exception as send_err:
                     invitation_err_msg = str(send_err)
                     logger.warning(f"Could not send email invitation to {att_email}: {send_err}")
@@ -369,15 +358,57 @@ async def confirm_event(
     except Exception as exc:
         logger.warning(f"Failed to update meeting record: {exc}")
 
-    output_payload = {
-        "preview_id": preview_id,
-        "calendar_event_id": created_event.get("id"),
-        "html_link": created_event.get("htmlLink"),
-        "hangout_link": meet_link,
+    formatted_attendees = []
+    for att in event_body.get("attendees", []):
+        email_str = att["email"] if isinstance(att, dict) and att.get("email") else str(att)
+        name_str = att.get("displayName") or email_str if isinstance(att, dict) else email_str
+        if "<" in email_str and ">" in email_str:
+            sp = email_str.split("<")
+            name_str = sp[0].strip()
+            email_str = sp[1].replace(">", "").strip()
+        formatted_attendees.append({"name": name_str, "email": email_str})
+
+    source_email_obj = {
+        "thread_id": "",
+        "message_id": "",
+        "subject": "",
+        "from": {"name": "", "email": ""},
+        "received_at": "",
+        "summary": ""
+    }
+    if source_email_id:
+        try:
+            em = await db.get(EmailMetadata, source_email_id)
+            if em:
+                s_name = em.sender.split("<")[0].strip() if em.sender and "<" in em.sender else (em.sender or "")
+                s_email = em.sender.split("<")[1].replace(">", "").strip() if em.sender and "<" in em.sender else (em.sender or "")
+                source_email_obj = {
+                    "thread_id": str(em.thread_id) if em.thread_id else "",
+                    "message_id": em.gmail_message_id or str(em.id),
+                    "subject": em.subject or "",
+                    "from": {"name": s_name, "email": s_email},
+                    "received_at": em.received_at.isoformat() if em.received_at else "",
+                    "summary": em.summary or ""
+                }
+        except Exception:
+            pass
+
+    meeting_obj = {
+        "id": created_event.get("id") or preview_id,
+        "title": event_body.get("summary") or "Meeting Proposal",
+        "start_time": event_body.get("start", {}).get("dateTime") or event_body.get("start", {}).get("date") or "",
+        "end_time": event_body.get("end", {}).get("dateTime") or event_body.get("end", {}).get("date") or "",
+        "timezone": event_body.get("start", {}).get("timeZone") or "UTC",
+        "location": event_body.get("location") or "Google Meet",
         "meet_link": meet_link,
-        "invitation_sent": invitation_sent,
-        "invitation_error": invitation_err_msg if not invitation_sent else None,
-        "status": "confirmed",
+        "attendees": formatted_attendees
+    }
+
+    output_payload = {
+        "status": "success",
+        "message": "Meeting scheduled successfully.",
+        "meeting": meeting_obj,
+        "source_email": source_email_obj,
     }
 
     await log_agent_action(
