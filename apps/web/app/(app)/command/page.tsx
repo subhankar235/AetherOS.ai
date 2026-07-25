@@ -400,19 +400,28 @@ export default function CommandCenter() {
   };
   // ─── VOICE ASSISTANT: Full Implementation ───────────────────────────────
 
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clear active VAD silence timer
+  const clearSilenceTimer = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+
   // Cancel any ongoing speech immediately (interruption support)
   const cancelSpeech = () => {
     // Stop ElevenLabs audio playback
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
-      // Revoke the blob URL to free memory
       if (audioRef.current.src) {
         URL.revokeObjectURL(audioRef.current.src);
       }
       audioRef.current = null;
     }
-    // Also cancel browser speech synthesis as fallback
+    // Cancel browser speech synthesis
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -420,19 +429,39 @@ export default function CommandCenter() {
     setSpeaking(false);
   };
 
+  // Pause microphone / recognition while TTS is playing to prevent self-transcription
+  const pauseMicrophone = () => {
+    clearSilenceTimer();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
+    setListening(false);
+  };
+
   // Speak text aloud via ElevenLabs TTS API, with browser fallback
-  // IMPORTANT: Starts listening simultaneously so user can interrupt mid-speech
+  // Microphones are PAUSED during TTS playback to prevent self-transcription
   const speakText = async (text: string, onDone?: () => void) => {
     if (typeof window === 'undefined') {
       onDone?.();
       return;
     }
-    // Cancel any existing speech first
+    // Cancel existing speech and pause microphone to prevent speaker audio feedback
     cancelSpeech();
+    pauseMicrophone();
     setSpeaking(true);
 
+    const handleSpeechFinished = () => {
+      setSpeaking(false);
+      onDone?.();
+      // Flow: Respond → Return to idle listening
+      if (callActiveRef.current) {
+        startListeningRound();
+      }
+    };
+
     try {
-      // Call our server-side TTS proxy (ElevenLabs)
+      // Call server-side TTS proxy (ElevenLabs)
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -449,17 +478,14 @@ export default function CommandCenter() {
       audio.onended = () => {
         URL.revokeObjectURL(audioUrl);
         audioRef.current = null;
-        setSpeaking(false);
-        onDone?.();
+        handleSpeechFinished();
       };
       audio.onerror = () => {
         URL.revokeObjectURL(audioUrl);
         audioRef.current = null;
-        setSpeaking(false);
-        onDone?.();
+        handleSpeechFinished();
       };
 
-      // Check if call was ended before playback started
       if (!callActiveRef.current) {
         URL.revokeObjectURL(audioUrl);
         setSpeaking(false);
@@ -467,16 +493,8 @@ export default function CommandCenter() {
       }
 
       await audio.play();
-
-      // START LISTENING DURING SPEECH for interruption support
-      // User can speak while audio is playing — recognition will fire,
-      // cancelSpeech() will stop audio, and new command will be processed
-      if (callActiveRef.current) {
-        startListeningRound();
-      }
     } catch (err) {
       console.warn('ElevenLabs TTS failed, falling back to browser speech:', err);
-      // Fallback to browser SpeechSynthesis
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
@@ -485,91 +503,130 @@ export default function CommandCenter() {
         utteranceRef.current = utterance;
         utterance.onend = () => {
           utteranceRef.current = null;
-          setSpeaking(false);
-          onDone?.();
+          handleSpeechFinished();
         };
         utterance.onerror = () => {
           utteranceRef.current = null;
-          setSpeaking(false);
-          onDone?.();
+          handleSpeechFinished();
         };
         window.speechSynthesis.speak(utterance);
-        // Also listen during browser speech for interruption
-        if (callActiveRef.current) startListeningRound();
       } else {
-        setSpeaking(false);
-        onDone?.();
+        handleSpeechFinished();
       }
     }
   };
 
-  // Start a new SpeechRecognition listening session (one utterance at a time)
+  // Start SpeechRecognition with Voice Activity Detection (VAD), silence detection (~750ms), and confidence filtering
   const startListeningRound = () => {
     if (typeof window === 'undefined') return;
     if (!callActiveRef.current) return;
+    if (speaking) return; // Do not start mic while assistant is speaking
     if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) return;
 
-    // Increment generation — any handlers from previous recognition instances
-    // will see a stale generation and NOT restart (prevents infinite abort loops)
     const gen = ++recognitionGenRef.current;
 
-    // Abort any existing recognition (this will fire onerror/onend on OLD instance,
-    // but those handlers will check generation and bail)
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (e) {}
-      recognitionRef.current = null;
+    pauseMicrophone();
+
+    // Acquire MediaStream with noise suppression, echo cancellation, and auto gain control
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      }).catch(err => {
+        console.warn("Audio constraints application notice:", err);
+      });
     }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
-    recognition.interimResults = false;
+    recognition.interimResults = true; // Enabled for real-time speech aggregation & VAD silence detection
     recognition.maxAlternatives = 1;
-    recognition.continuous = false;
+    recognition.continuous = true; // Continuous listening during active turn
     recognitionRef.current = recognition;
     setListening(true);
 
+    let capturedTranscript = "";
+    let finalTranscriptText = "";
+
+    recognition.onspeechstart = () => {
+      if (gen !== recognitionGenRef.current) return;
+      clearSilenceTimer();
+    };
+
     recognition.onresult = (event: any) => {
-      if (gen !== recognitionGenRef.current) return; // stale
-      const spokenText = event.results[0][0].transcript;
-      // INTERRUPTION: cancel any ongoing speech immediately
-      cancelSpeech();
-      // Send the user's voice input through the command pipeline
-      sendVoiceCommand(spokenText);
+      if (gen !== recognitionGenRef.current) return;
+      clearSilenceTimer();
+
+      let textChunk = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const alternative = res[0];
+        if (alternative && alternative.transcript) {
+          const confidence = alternative.confidence ?? 1.0;
+          // Filter low-confidence noise (< 0.35) while preserving real speech
+          if (confidence >= 0.35 || res.isFinal) {
+            textChunk += " " + alternative.transcript;
+          }
+        }
+      }
+
+      if (textChunk.trim()) {
+        finalTranscriptText = (capturedTranscript + " " + textChunk).trim();
+      }
+
+      // VAD Silence Detection: Automatically stop and process command after ~800ms of silence
+      silenceTimerRef.current = setTimeout(() => {
+        if (gen === recognitionGenRef.current && recognitionRef.current) {
+          try {
+            recognitionRef.current.stop();
+          } catch (e) {}
+        }
+      }, 800);
     };
 
     recognition.onerror = (event: any) => {
-      if (gen !== recognitionGenRef.current) return; // stale — don't restart
-      // Only restart on no-speech (user was silent too long)
-      if (callActiveRef.current && event.error === 'no-speech') {
+      if (gen !== recognitionGenRef.current) return;
+      clearSilenceTimer();
+      if (callActiveRef.current && event.error === 'no-speech' && !speaking) {
         setTimeout(() => {
-          if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
+          if (callActiveRef.current && gen === recognitionGenRef.current && !speaking) {
+            startListeningRound();
+          }
         }, 500);
-      }
-      // For 'aborted' — do nothing, it was our own intentional abort
-      // For other errors — log but don't loop
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        console.warn('SpeechRecognition error:', event.error);
       }
     };
 
     recognition.onend = () => {
-      if (gen !== recognitionGenRef.current) return; // stale — don't restart
+      if (gen !== recognitionGenRef.current) return;
+      clearSilenceTimer();
       setListening(false);
-      // Auto-restart listening if call is still active
-      if (callActiveRef.current) {
+
+      if (finalTranscriptText) {
+        // Flow: Detect end of speech → Process → Respond
+        const textToProcess = finalTranscriptText;
+        finalTranscriptText = "";
+        sendVoiceCommand(textToProcess);
+      } else if (callActiveRef.current && !speaking) {
+        // Return to idle listening loop
         setTimeout(() => {
-          if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
-        }, 300);
+          if (callActiveRef.current && gen === recognitionGenRef.current && !speaking) {
+            startListeningRound();
+          }
+        }, 400);
       }
     };
 
     try {
       recognition.start();
     } catch (e) {
-      // Failed to start — retry once after delay
       setTimeout(() => {
-        if (callActiveRef.current && gen === recognitionGenRef.current) startListeningRound();
+        if (callActiveRef.current && gen === recognitionGenRef.current && !speaking) {
+          startListeningRound();
+        }
       }, 600);
     }
   };

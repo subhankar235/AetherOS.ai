@@ -314,6 +314,49 @@ async def test_voice_interruption_remembers_completed_task_context():
         assert spoken == "No problem."
 
 
+@pytest.mark.asyncio
+async def test_vad_confidence_filtering_ignores_ambient_noise():
+    import json
+    from voice.stt_client import SpeechToTextClient
+    client = SpeechToTextClient(api_key="mock_key")
+
+    mock_ws = AsyncMock()
+    # Mock WebSocket messages: 1 low-confidence noise transcript (0.2), 1 high-confidence speech transcript (0.95), 1 session_ended
+    messages = [
+        json.dumps({"message_type": "transcript", "text": "cough noise", "confidence": 0.2}),
+        json.dumps({"message_type": "transcript", "text": "Schedule a meeting", "confidence": 0.95}),
+        json.dumps({"message_type": "session_ended"}),
+    ]
+
+    async def mock_ws_iter():
+        for msg in messages:
+            yield msg
+
+    mock_ws.__aiter__ = lambda self: mock_ws_iter()
+
+    def mock_connect(*args, **kwargs):
+        class MockWSContext:
+            async def __aenter__(self):
+                return mock_ws
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+        return MockWSContext()
+
+    async def empty_audio_gen():
+        return
+        yield b""
+
+    with patch("websockets.connect", side_effect=mock_connect):
+        results = []
+        async for update in client.transcribe_stream(empty_audio_gen()):
+            results.append(update)
+
+        assert len(results) == 1
+        assert results[0]["type"] == "final"
+        assert results[0]["text"] == "Schedule a meeting"
+        assert results[0]["confidence"] == 0.95
+
+
 async def _async_iter(items):
     for item in items:
         yield item

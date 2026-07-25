@@ -107,11 +107,15 @@ class SpeechToTextClient:
                                     "text": data.get("text", "")
                                 })
                             elif message_type == "final_transcript" or message_type == "transcript":
-                                # Scribe may return "final_transcript" or standard "transcript"
+                                conf = float(data.get("confidence", 1.0))
+                                txt = data.get("text", "").strip()
+                                if conf < 0.5:
+                                    logger.info(f"Ignored low confidence transcription (ambient noise): '{txt}', confidence={conf}")
+                                    continue
                                 await yield_queue.put({
                                     "type": "final",
-                                    "text": data.get("text", ""),
-                                    "confidence": data.get("confidence", 1.0)
+                                    "text": txt,
+                                    "confidence": conf
                                 })
                             elif message_type == "session_ended":
                                 logger.info("STT session ended by server.")
