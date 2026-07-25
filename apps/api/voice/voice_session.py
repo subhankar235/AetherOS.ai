@@ -94,14 +94,24 @@ class VoiceSessionCoordinator:
 
         logger.info(f"Speech transcription finalized: '{final_transcript}'")
 
-        # 3. Handoff to Supervisor Agent (Stubbed for Phase 10)
-        # Returns a standard response for testing
-        agent_response = await self._stubbed_supervisor_call(final_transcript)
-        logger.info(f"Supervisor Agent response (stubbed): '{agent_response}'")
+        # 3. Handoff to Supervisor Agent
+        from agents.supervisor import supervisor_graph
+        from agents.supervisor.context_manager import get_default_context
+        context = getattr(user, "voice_context", None) or get_default_context()
 
-        # 4. Apply Human Voice Layer turn re-writing (Stubbed for Phase 8.5)
-        rewritten_response = await self._stubbed_human_voice_rewrite(agent_response)
-        logger.info(f"Human Voice Layer rewritten response (stubbed): '{rewritten_response}'")
+        response_data = await supervisor_graph.run(
+            user_id=str(user.id),
+            session_id=active_session,
+            raw_input=final_transcript,
+            input_mode="voice",
+            conversation_context=context,
+        )
+        logger.info(f"Supervisor Agent response: {response_data}")
+
+        # 4. Apply Human Voice Layer turn re-writing
+        from voice.conversational_rewrite import rewrite
+        rewritten_response = rewrite(response_data, context=context)
+        logger.info(f"Human Voice Layer rewritten response: '{rewritten_response}'")
 
         # 5. Synthesize TTS output stream
         voice_id = user.voice_profile_id or settings.ELEVENLABS_DEFAULT_VOICE_ID
@@ -114,17 +124,3 @@ class VoiceSessionCoordinator:
         except Exception as e:
             logger.error(f"TTS execution failed in voice session coordinator: {str(e)}")
             raise
-
-    async def _stubbed_supervisor_call(self, text: str) -> str:
-        """
-        Placeholder for Phase 10 LangGraph Supervisor orchestrator.
-        """
-        await asyncio.sleep(0.1)  # Simulate network/processing delay
-        return f"Supervisor processed query: '{text}'"
-
-    async def _stubbed_human_voice_rewrite(self, text: str) -> str:
-        """
-        Placeholder for Phase 8.5 Human Voice Layer.
-        """
-        await asyncio.sleep(0.1)  # Simulate response rewrite
-        return f"Here is the voice response. {text}"

@@ -12,8 +12,9 @@ from agents.supervisor.prompts import INJECTION_GUARDRAIL
 
 logger = logging.getLogger("agents.support_agent.help")
 
-CLASSIFIER_PROMPT = """You are a support triage system. Classify the user's question into one of:
+CLASSIFIER_PROMPT = """You are a support triage system for AetherOS.ai. Classify the user's question into one of:
 
+- **identity_or_greeting**: Questions about identity ("Who are you?", "What can you do?", "How are you?", "How can you help me?", "What features do you have?"), greetings ("hello", "hi"), or general assistant chitchat
 - **genuine_question**: A real how-to or product question that could be answered from documentation
 - **feature_request**: The user is asking for a new feature or capability that doesn't exist yet
   ("can it do X", "I wish it could", "add support for", "why doesn't it have")
@@ -26,21 +27,34 @@ Respond with the classification only.
 
 """ + INJECTION_GUARDRAIL
 
-ANSWER_PROMPT = """You are a product support agent. Answer the user's question based ONLY on the
-provided support documentation passages. If the passages don't contain the answer, say so clearly
-— do not fabricate functionality or guess.
+IDENTITY_PROMPT = """You are AetherOS.ai, an AI-powered executive assistant operating system designed for founders, executives, and professionals.
+You operate conversationally by voice or text.
+Your key features and capabilities include:
+1. **Inbox Search & Triage**: Find, read, and summarize emails from Gmail/inbox in real time.
+2. **AI Email Reply Drafting**: Draft context-aware, polished email replies grounded in your inbox and company knowledge base.
+3. **Calendar & Meeting Scheduling**: Schedule meetings, check attendee availability, avoid double-booking, and create Google Meet links.
+4. **Company Memory & Knowledge Base Query**: Retrieve answers from company documentation and policies.
+5. **Market & Company Research**: Conduct comprehensive research on companies and industries.
+6. **Voice Assistant**: Natural hands-free conversational voice interaction powered by ElevenLabs STT & TTS.
 
 Rules:
-- Only use information present in the provided passages
-- If no passage is relevant, say "I couldn't find documentation on that. Let me log this so our team can help."
-- Be concise and helpful
-- Cite the source document title for each claim
+- ALWAYS identify yourself as **AetherOS.ai** when introducing yourself or answering "Who are you?", "What can you do?", "How are you?", "How can you help me?", "What features do you have?".
+- Generate dynamic, conversational, warm, and natural responses. NEVER use static or hardcoded template messages.
+- Keep responses concise, clear, and direct (2-4 natural sentences).
+""" + INJECTION_GUARDRAIL
+
+ANSWER_PROMPT = """You are AetherOS.ai, the AI executive assistant operating system. Answer the user's question based on the provided support documentation passages or general product knowledge.
+
+Rules:
+- Identify yourself as AetherOS.ai
+- Be concise, helpful, and natural
+- Cite source document titles if available
 
 """ + INJECTION_GUARDRAIL
 
 
 class QuestionClassification(BaseModel):
-    type: str = Field(description="One of: genuine_question, feature_request, bug_report, feedback, other")
+    type: str = Field(description="One of: identity_or_greeting, genuine_question, feature_request, bug_report, feedback, other")
 
 
 class SupportAnswer(BaseModel):
@@ -48,10 +62,48 @@ class SupportAnswer(BaseModel):
     source_titles: list[str] = Field(default_factory=list, description="Source document titles")
 
 
+async def _generate_identity_answer(question: str, llm: Optional[ChatOpenAI] = None) -> str:
+    try:
+        from core.llm_factory import invoke_llm_with_fallback
+        messages = [
+            {"role": "system", "content": IDENTITY_PROMPT},
+            {"role": "user", "content": f"User question: '{question}'"},
+        ]
+        response, _ = invoke_llm_with_fallback(messages=messages, is_classifier=False)
+        content = getattr(response, "content", "") or str(response)
+        if content and len(content.strip()) > 5:
+            return content.strip()
+    except Exception as exc:
+        logger.warning(f"Identity response LLM generation failed: {exc}")
+
+    return "Hello! I am AetherOS.ai, your AI executive assistant operating system. I can help you search your inbox, draft email replies, schedule calendar meetings with Google Meet, query company knowledge, and run market research. How can I help you today?"
+
+
 async def answer_question(
     question: str,
     llm: Optional[ChatOpenAI] = None,
 ) -> dict[str, Any]:
+    lowered = question.lower().strip()
+    identity_kws = [
+        "who are you", "what is your name", "what's your name", "what is ur name", "what can you do", "how are you", "how can you help",
+        "what features", "what can i do", "who made you", "what is aetheros",
+        "who is aetheros", "tell me about yourself", "who built you", "introduce yourself"
+    ]
+    if any(kw in lowered for kw in identity_kws) or lowered in ("hi", "hello", "hey", "greetings"):
+        answer_text = await _generate_identity_answer(question, llm)
+        return {
+            "agent": "support_agent",
+            "status": "completed",
+            "result": {
+                "answer": answer_text,
+                "message": answer_text,
+                "sources": [],
+                "classification": "identity_or_greeting",
+            },
+            "context_updates": {"last_support_query": question},
+            "requires_approval": False,
+        }
+
     if llm is None:
         llm = ChatOpenAI(
             model="gpt-4o-mini",
@@ -62,11 +114,26 @@ async def answer_question(
     classification = await _classify_question(question, llm)
     logger.info(f"Support question classified as: {classification.type}")
 
+    if classification.type == "identity_or_greeting":
+        answer_text = await _generate_identity_answer(question, llm)
+        return {
+            "agent": "support_agent",
+            "status": "completed",
+            "result": {
+                "answer": answer_text,
+                "message": answer_text,
+                "sources": [],
+                "classification": "identity_or_greeting",
+            },
+            "context_updates": {"last_support_query": question},
+            "requires_approval": False,
+        }
+
     if classification.type == "feature_request":
         return _feedback_result(
             question,
             "feature_request",
-            "That sounds like a great feature idea! I've logged your request for our product team to review. "
+            "That sounds like a great feature idea! I'm AetherOS.ai, and I've logged your request for our product team to review. "
             "We'll consider it for a future update.",
         )
 
@@ -74,14 +141,14 @@ async def answer_question(
         return _feedback_result(
             question,
             "bug_report",
-            "Thanks for reporting this! I've logged the details so our engineering team can investigate and fix it.",
+            "Thanks for reporting this! I'm AetherOS.ai and I've logged the details so our engineering team can investigate and fix it.",
         )
 
     if classification.type == "feedback":
         return _feedback_result(
             question,
             "feedback",
-            "Thanks for your feedback! I've logged it and our team will take it into consideration.",
+            "Thanks for your feedback! I'm AetherOS.ai and I've logged it for our product team.",
         )
 
     answer = await _retrieve_and_answer(question, llm)
@@ -90,6 +157,7 @@ async def answer_question(
         "status": "completed",
         "result": {
             "answer": answer.answer,
+            "message": answer.answer,
             "sources": answer.source_titles,
             "classification": classification.type,
         },

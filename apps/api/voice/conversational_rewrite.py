@@ -86,6 +86,11 @@ def _heuristic_rewrite(
             return f"I've prepared a meeting slot for '{title}' — should I go ahead and schedule this meeting?"
         return f"Meeting '{title}' has been successfully scheduled."
 
+    if agent_name == "support_agent" or "answer" in result:
+        ans = result.get("answer") or result.get("message")
+        if ans and isinstance(ans, str):
+            return ans.strip()
+
     if "message" in result and isinstance(result["message"], str):
         msg = result["message"].strip()
         if not (msg.startswith("{") or "query returned" in msg.lower()):

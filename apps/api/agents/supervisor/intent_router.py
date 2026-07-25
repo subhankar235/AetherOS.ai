@@ -73,6 +73,24 @@ async def classify_intent(
 ) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
+    # Ultra-fast path for identity, greeting & capability chitchat queries
+    identity_kws = [
+        "who are you", "what is your name", "what's your name", "what is ur name", "what can you do", "how are you", "how can you help",
+        "what features", "what can i do", "who made you", "what is aetheros",
+        "who is aetheros", "tell me about yourself", "who built you", "introduce yourself"
+    ]
+    if any(kw in lowered for kw in identity_kws) or lowered in ("hi", "hello", "hey", "greetings"):
+        logger.info(f"Fast-path matched identity/conversational query: '{raw_input}'")
+        return {
+            "tasks": [{
+                "agent": "support_agent",
+                "action": "help",
+                "params": {"question": raw_input}
+            }],
+            "intent": "support_agent_help",
+            "clarification_text": None,
+        }
+
     # Ultra-fast path (0.1ms) for calendar & scheduling intent
     cal_kws = ["schedule", "meeting", "meet", "calendar", "book", "slot", "appointment"]
     if any(kw in lowered for kw in cal_kws):
@@ -248,6 +266,18 @@ def _parse_llm_response(
 def _fallback_classification(raw_input: str) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
+    identity_kws = [
+        "who are you", "what is your name", "what's your name", "what is ur name", "what can you do", "how are you", "how can you help",
+        "what features", "what can i do", "who made you", "what is aetheros",
+        "who is aetheros", "tell me about yourself", "who built you", "introduce yourself"
+    ]
+    if any(kw in lowered for kw in identity_kws) or lowered in ("hi", "hello", "hey", "greetings"):
+        return {
+            "intent": "single",
+            "tasks": [{"agent": "support_agent", "action": "help", "params": {"question": raw_input}}],
+            "clarification_text": None,
+        }
+
     has_reply = any(k in lowered for k in ["reply", "eply", "rply", "draft", "compose", "write", "answer", "respond"])
     has_schedule = any(k in lowered for k in ["schedule", "sdhudle", "shdule", "schdule", "meeting", "meet", "calendar", "book", "slot", "appointment"])
     has_inbox = any(k in lowered for k in ["search", "find", "show", "list", "open", "read", "email", "mail", "inbox", "recent", "past", "give", "get", "fetch", "unread", "hrs", "hours", "from", "form", "frm"])
@@ -305,16 +335,8 @@ def _fallback_classification(raw_input: str) -> dict[str, Any]:
             "clarification_text": None,
         }
 
-    # 5. Knowledge query keywords: what, how, when, where, why, tell me, kb, knowledge, doc, policy
-    if any(k in lowered for k in ["what", "how", "when", "where", "why", "tell me", "kb", "knowledge", "doc", "policy"]):
-        return {
-            "intent": "single",
-            "tasks": [{"agent": "knowledge_agent", "action": "query", "params": {"query": raw_input}}],
-            "clarification_text": None,
-        }
-
-    # 6. Support keywords: help, tutorial, guide, bug
-    if any(k in lowered for k in ["help", "tutorial", "guide", "bug"]):
+    # 5. Support & General Knowledge questions: help, tutorial, guide, bug, what, how, who
+    if any(k in lowered for k in ["help", "tutorial", "guide", "bug", "what", "how", "who", "why", "when", "where", "tell me"]):
         return {
             "intent": "single",
             "tasks": [{"agent": "support_agent", "action": "help", "params": {"question": raw_input}}],
@@ -322,8 +344,8 @@ def _fallback_classification(raw_input: str) -> dict[str, Any]:
         }
 
     return {
-        "intent": "clarification",
-        "tasks": [],
-        "clarification_text": "I'm not sure what you'd like to do. Try something like: 'Show my unread emails', 'Reply to the last email', 'Schedule a meeting', or 'Research Acme Corp'.",
+        "intent": "single",
+        "tasks": [{"agent": "support_agent", "action": "help", "params": {"question": raw_input}}],
+        "clarification_text": None,
     }
 
