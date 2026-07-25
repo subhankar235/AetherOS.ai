@@ -69,8 +69,11 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_SUPPORT_KB: str = "support_kb"
     
     # Sentry DSN
-    # Web Search
+    # Web Search / Market Research
     TAVILY_API_KEY: Optional[str] = None
+    BRAVE_SEARCH_API_KEY: Optional[str] = None
+    SERPER_API_KEY: Optional[str] = None
+    FIRECRAWL_API_KEY: Optional[str] = None
     
     SENTRY_DSN: Optional[str] = None
     

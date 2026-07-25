@@ -42,6 +42,7 @@ async def run_research(
             "result": {
                 "executive_summary": f"Research could not be planned for '{company}'.",
                 "company_overview": "No data found.",
+                "swot_analysis": "No data found.",
                 "competitors": "No data found.",
                 "recent_news": "No data found.",
                 "opportunities": "No data found.",
@@ -76,6 +77,7 @@ def _build_result(company: str, report) -> dict[str, Any]:
         "result": {
             "executive_summary": report.executive_summary,
             "company_overview": report.company_overview,
+            "swot_analysis": report.swot_analysis,
             "competitors": report.competitors,
             "recent_news": report.recent_news,
             "opportunities": report.opportunities,
