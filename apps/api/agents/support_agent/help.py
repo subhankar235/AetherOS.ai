@@ -14,7 +14,8 @@ logger = logging.getLogger("agents.support_agent.help")
 
 CLASSIFIER_PROMPT = """You are a support triage system for AetherOS.ai. Classify the user's question into one of:
 
-- **identity_or_greeting**: Questions about identity ("Who are you?", "What can you do?", "How are you?", "How can you help me?", "What features do you have?"), greetings ("hello", "hi"), or general assistant chitchat
+- **identity_or_greeting**: Questions about identity ("Who are you?", "What can you do?", "How are you?", "How can you help me?", "What features do you have?"), greetings ("hello", "hi"), jokes, or general conversational chat
+- **general_conversation**: Out-of-box questions, technical explanations ("Explain OAuth", "What's LangGraph"), general knowledge, advice, jokes, chitchat, or any question not requiring inbox/calendar actions.
 - **genuine_question**: A real how-to or product question that could be answered from documentation
 - **feature_request**: The user is asking for a new feature or capability that doesn't exist yet
   ("can it do X", "I wish it could", "add support for", "why doesn't it have")
@@ -43,6 +44,17 @@ Rules:
 - Keep responses concise, clear, and direct (2-4 natural sentences).
 """ + INJECTION_GUARDRAIL
 
+GENERAL_CONVERSATION_PROMPT = """You are AetherOS.ai, an intelligent AI executive assistant.
+You are having a natural, open-ended conversation with the user.
+Answer the user's question, request, joke, or explanation clearly, accurately, and conversationally using your general knowledge.
+
+Rules:
+- Speak naturally, warmly, and intelligently.
+- Provide direct, high-quality answers (e.g. explain technical concepts like OAuth or LangGraph clearly, tell witty jokes when asked, answer "How are you?" cordially).
+- Do NOT use hardcoded template strings or generic canned responses.
+- Keep answers engaging, structured, and easy to read or listen to aloud.
+""" + INJECTION_GUARDRAIL
+
 ANSWER_PROMPT = """You are AetherOS.ai, the AI executive assistant operating system. Answer the user's question based on the provided support documentation passages or general product knowledge.
 
 Rules:
@@ -54,7 +66,7 @@ Rules:
 
 
 class QuestionClassification(BaseModel):
-    type: str = Field(description="One of: identity_or_greeting, genuine_question, feature_request, bug_report, feedback, other")
+    type: str = Field(description="One of: identity_or_greeting, general_conversation, genuine_question, feature_request, bug_report, feedback, other")
 
 
 class SupportAnswer(BaseModel):
@@ -79,11 +91,43 @@ async def _generate_identity_answer(question: str, llm: Optional[ChatOpenAI] = N
     return "Hello! I am AetherOS.ai, your AI executive assistant operating system. I can help you search your inbox, draft email replies, schedule calendar meetings with Google Meet, query company knowledge, and run market research. How can I help you today?"
 
 
+async def _generate_general_conversation(question: str, llm: Optional[ChatOpenAI] = None) -> str:
+    try:
+        from core.llm_factory import invoke_llm_with_fallback
+        messages = [
+            {"role": "system", "content": GENERAL_CONVERSATION_PROMPT},
+            {"role": "user", "content": f"User prompt: '{question}'"},
+        ]
+        response, _ = invoke_llm_with_fallback(messages=messages, is_classifier=False)
+        content = getattr(response, "content", "") or str(response)
+        if content and len(content.strip()) > 5:
+            return content.strip()
+    except Exception as exc:
+        logger.warning(f"General conversation response LLM generation failed: {exc}")
+
+    return f"I'd be happy to help with that! Regarding '{question}': I'm AetherOS.ai, your executive assistant, and I'm ready to assist you."
+
+
 async def answer_question(
     question: str,
     llm: Optional[ChatOpenAI] = None,
 ) -> dict[str, Any]:
     lowered = question.lower().strip()
+    neg_ack_kws = ["don't read", "dont read", "no need to read", "don't read it", "dont read it", "skip that", "never mind", "no thanks", "no problem", "that's fine", "its fine", "it's fine"]
+    if any(kw in lowered for kw in neg_ack_kws):
+        return {
+            "agent": "support_agent",
+            "status": "completed",
+            "result": {
+                "answer": "No problem.",
+                "message": "No problem.",
+                "sources": [],
+                "classification": "acknowledgment",
+            },
+            "context_updates": {"last_support_query": question},
+            "requires_approval": False,
+        }
+
     identity_kws = [
         "who are you", "what is your name", "what's your name", "what is ur name", "what can you do", "how are you", "how can you help",
         "what features", "what can i do", "who made you", "what is aetheros",
@@ -104,6 +148,23 @@ async def answer_question(
             "requires_approval": False,
         }
 
+    # Fast-path for common out-of-box conversational queries (jokes, explanations, tech questions)
+    general_kws = ["joke", "oauth", "langgraph", "explain", "tell me a", "how does", "what is a ", "what is an ", "what are ", "why is ", "tell me about "]
+    if any(kw in lowered for kw in general_kws):
+        answer_text = await _generate_general_conversation(question, llm)
+        return {
+            "agent": "support_agent",
+            "status": "completed",
+            "result": {
+                "answer": answer_text,
+                "message": answer_text,
+                "sources": [],
+                "classification": "general_conversation",
+            },
+            "context_updates": {"last_support_query": question},
+            "requires_approval": False,
+        }
+
     if llm is None:
         llm = ChatOpenAI(
             model="gpt-4o-mini",
@@ -114,8 +175,11 @@ async def answer_question(
     classification = await _classify_question(question, llm)
     logger.info(f"Support question classified as: {classification.type}")
 
-    if classification.type == "identity_or_greeting":
-        answer_text = await _generate_identity_answer(question, llm)
+    if classification.type in ("identity_or_greeting", "general_conversation"):
+        if classification.type == "identity_or_greeting":
+            answer_text = await _generate_identity_answer(question, llm)
+        else:
+            answer_text = await _generate_general_conversation(question, llm)
         return {
             "agent": "support_agent",
             "status": "completed",
@@ -123,7 +187,7 @@ async def answer_question(
                 "answer": answer_text,
                 "message": answer_text,
                 "sources": [],
-                "classification": "identity_or_greeting",
+                "classification": classification.type,
             },
             "context_updates": {"last_support_query": question},
             "requires_approval": False,

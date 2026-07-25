@@ -24,6 +24,9 @@ def rewrite(
     context: Optional[dict[str, Any]] = None,
     tone: Optional[str] = None,
 ) -> str:
+    if isinstance(agent_response, dict) and "agent_response" in agent_response and isinstance(agent_response["agent_response"], dict):
+        agent_response = agent_response["agent_response"]
+
     if isinstance(agent_response, AgentResponse):
         agent_name = agent_response.agent
         result_payload = agent_response.result or {}
@@ -52,6 +55,14 @@ def _heuristic_rewrite(
     requires_approval: bool,
     tone: str,
 ) -> Optional[str]:
+    if result.get("outcome_summary") and isinstance(result["outcome_summary"], str):
+        return result["outcome_summary"].strip()
+
+    if agent_name == "support_agent" or "answer" in result:
+        ans = result.get("answer") or result.get("message")
+        if ans and isinstance(ans, str):
+            return ans.strip()
+
     if tone == TONE_CALM_SERIOUS or result.get("suspicious_flag") or result.get("is_suspicious") or result.get("fraud"):
         sender = result.get("sender") or result.get("from") or "an unverified address"
         subject = result.get("subject") or "a suspicious message"

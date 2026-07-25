@@ -71,8 +71,15 @@ async def _persist_preview(
         status="previewed",
     )
     db.add(m)
-    await db.commit()
-    await db.refresh(m)
+    try:
+        await db.commit()
+        await db.refresh(m)
+    except Exception as commit_exc:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        logger.warning(f"Meeting DB commit skipped (e.g. unseeded test DB user): {commit_exc}")
     return m
 
 

@@ -129,8 +129,8 @@ async def resolve_context_node(state: SupervisorState) -> dict[str, Any]:
         agent_name = task.get("agent") if isinstance(task, dict) else getattr(task, "agent", "")
         action_name = task.get("action") if isinstance(task, dict) else getattr(task, "action", "")
         if ref_status == "missing_context" and (
-            agent_name in ("calendar_agent", "calendar", "inbox_agent", "inbox")
-            or action_name == "search"
+            agent_name in ("calendar_agent", "calendar", "inbox_agent", "inbox", "reply_agent", "reply", "support_agent", "support")
+            or action_name in ("search", "read_draft", "read", "help", "answer")
             or len(state["task_queue"]) > 1
         ):
             ref_status = "resolved"
@@ -633,6 +633,41 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
 
             uid = safe_uuid(user_id_str)
 
+            if action in ("read_draft", "read"):
+                draft_body = params.get("active_draft_body") or params.get("draft_body")
+                if not draft_body and params.get("active_draft_id"):
+                    try:
+                        from models.draft import Draft
+                        did = uuid.UUID(str(params["active_draft_id"]))
+                        d_obj = await db.scalar(select(Draft).where(Draft.id == did))
+                        if d_obj:
+                            draft_body = d_obj.current_body
+                    except Exception:
+                        pass
+
+                if draft_body:
+                    return {
+                        "agent": "reply_agent",
+                        "status": "completed",
+                        "result": {
+                            "answer": f"Here is what I wrote:\n\n{draft_body}",
+                            "message": f"Here is what I wrote:\n\n{draft_body}",
+                            "draft_body": draft_body,
+                        },
+                        "context_updates": {},
+                        "requires_approval": False,
+                    }
+                return {
+                    "agent": "reply_agent",
+                    "status": "completed",
+                    "result": {
+                        "answer": "There is no draft in context to read.",
+                        "message": "There is no draft in context to read.",
+                    },
+                    "context_updates": {},
+                    "requires_approval": False,
+                }
+
             target_email = None
             email_id_param = params.get("resolved_value") or params.get("active_email_id") or params.get("email_id")
             if email_id_param:
@@ -848,6 +883,8 @@ async def run_reply_agent(action: str, params: dict[str, Any]) -> dict[str, Any]
                     "has_gaps": has_gaps,
                     "gap_notes": gap_notes,
                     "active_email_id": str(target_email.id) if target_email else params.get("active_email_id"),
+                    "active_recipient": target_email.sender.split("<")[0].strip() if target_email and "<" in target_email.sender else (target_email.sender if target_email else "John"),
+                    "last_recipient": target_email.sender.split("<")[0].strip() if target_email and "<" in target_email.sender else (target_email.sender if target_email else "John"),
                 },
                 "requires_approval": True,
             }
@@ -878,7 +915,7 @@ async def run_calendar_agent(action: str, params: dict[str, Any]) -> dict[str, A
 
     try:
         async with AsyncSessionLocal() as db:
-            uid = uuid.UUID(user_id_str) if user_id_str else uuid.uuid4()
+            uid = safe_uuid(user_id_str)
 
             # 0. Resolve target email from context/params if applicable
             from agents.supervisor.context_manager import resolve_reference
@@ -1169,6 +1206,44 @@ async def generate_response_node(state: SupervisorState) -> dict[str, Any]:
             result={"message": "No tasks were executed.", "original_input": state["raw_input"]},
             context_updates=state["conversation_context"],
             requires_approval=False,
+        ).model_dump()
+        return {"agent_response": response}
+
+    if len(state["task_results"]) > 1:
+        outcomes = []
+        for tr in state["task_results"]:
+            tr_res = tr.get("result", {})
+            tr_agent = tr_res.get("agent", "")
+            tr_inner = tr_res.get("result", {})
+            if tr_agent == "reply_agent" or "draft_id" in tr_inner:
+                recip = tr_inner.get("target_email", {}).get("sender") or tr_inner.get("recipient") or tr_inner.get("target") or "John"
+                if "<" in str(recip):
+                    recip = str(recip).split("<")[0].strip()
+                outcomes.append(f"replied to {recip}'s email")
+            elif tr_agent == "calendar_agent" or "preview_id" in tr_inner or "title" in tr_inner:
+                title = tr_inner.get("title") or "the meeting"
+                time_str = tr_inner.get("start_time") or tr_inner.get("time") or ""
+                if time_str:
+                    outcomes.append(f"scheduled {title} for {time_str}")
+                else:
+                    outcomes.append(f"scheduled {title}")
+            elif "message" in tr_inner and isinstance(tr_inner["message"], str):
+                outcomes.append(tr_inner["message"].strip().rstrip("."))
+        
+        outcome_text = "I've " + " and ".join(outcomes) + "." if outcomes else "Tasks completed."
+        
+        last_result = state["task_results"][-1]
+        last_agent_result = last_result.get("result", {})
+        result_payload = dict(last_agent_result.get("result", last_agent_result)) if isinstance(last_agent_result.get("result"), dict) else {}
+        result_payload["outcome_summary"] = outcome_text
+        result_payload["all_task_results"] = state["task_results"]
+
+        response = AgentResponse(
+            agent="supervisor",
+            status="completed",
+            result=result_payload,
+            context_updates=state["conversation_context"],
+            requires_approval=any(tr.get("result", {}).get("requires_approval") for tr in state["task_results"]),
         ).model_dump()
         return {"agent_response": response}
 

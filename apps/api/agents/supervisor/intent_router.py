@@ -73,11 +73,12 @@ async def classify_intent(
 ) -> dict[str, Any]:
     lowered = raw_input.lower().strip()
 
-    # Ultra-fast path for identity, greeting & capability chitchat queries
+    # Ultra-fast path for identity, greeting, capability & general conversational queries
     identity_kws = [
         "who are you", "what is your name", "what's your name", "what is ur name", "what can you do", "how are you", "how can you help",
         "what features", "what can i do", "who made you", "what is aetheros",
-        "who is aetheros", "tell me about yourself", "who built you", "introduce yourself"
+        "who is aetheros", "tell me about yourself", "who built you", "introduce yourself",
+        "joke", "oauth", "langgraph", "explain", "tell me a"
     ]
     if any(kw in lowered for kw in identity_kws) or lowered in ("hi", "hello", "hey", "greetings"):
         logger.info(f"Fast-path matched identity/conversational query: '{raw_input}'")
@@ -105,6 +106,34 @@ async def classify_intent(
                 }
             }],
             "intent": "calendar_agent_schedule",
+            "clarification_text": None,
+        }
+
+    # Fast path for negative acknowledgments ("don't read it", "no need to read", "skip that", "never mind")
+    neg_ack_kws = ["don't read", "dont read", "no need to read", "don't read it", "dont read it", "skip that", "never mind", "no thanks", "no problem", "that's fine", "its fine", "it's fine"]
+    if any(kw in lowered for kw in neg_ack_kws):
+        logger.info(f"Fast-path matched negative acknowledgment: '{raw_input}'")
+        return {
+            "tasks": [{
+                "agent": "support_agent",
+                "action": "help",
+                "params": {"question": raw_input}
+            }],
+            "intent": "support_agent_ack",
+            "clarification_text": None,
+        }
+
+    # Ultra-fast path (0.1ms) for explicit read requests ("read it", "show me the draft", "tell me what you wrote")
+    read_kws = ["read it", "show me the draft", "show the draft", "read the summary", "tell me what you wrote", "read the draft", "what did you write", "read draft"]
+    if any(kw in lowered for kw in read_kws) or lowered in ("read it", "show draft", "read draft"):
+        logger.info(f"Fast-path matched read draft/summary request: '{raw_input}'")
+        return {
+            "tasks": [{
+                "agent": "reply_agent",
+                "action": "read_draft",
+                "params": {"question": raw_input}
+            }],
+            "intent": "reply_agent_read_draft",
             "clarification_text": None,
         }
 

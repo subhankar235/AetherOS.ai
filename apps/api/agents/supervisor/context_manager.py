@@ -143,7 +143,25 @@ async def resolve_reference(
         if resolved_value is not None:
             return "resolved", {"resolved_reference": exact, "resolved_value": resolved_value}
 
-    # 5. Heuristic check for email pronouns/actions (e.g. "this", "it", "that", "same", "same email", "reply", "draft")
+    # 5. Check for person pronouns: "him", "her", "them", "with him", "with her", "with them"
+    pronoun_keywords = ["with him", "with her", "with them", "him", "her", "them"]
+    if any(re.search(r'\b' + re.escape(p) + r'\b', lowered) for p in pronoun_keywords):
+        recip = (
+            context.get("active_recipient")
+            or context.get("last_recipient")
+        )
+        if not recip and isinstance(context.get("resolved_email"), dict):
+            recip = context["resolved_email"].get("sender")
+        if recip:
+            if "<" in str(recip):
+                recip = str(recip).split("<")[0].strip()
+            return "resolved", {
+                "resolved_reference": "active_recipient",
+                "resolved_value": recip,
+                "email_reference": recip,
+            }
+
+    # 6. Heuristic check for email pronouns/actions (e.g. "this", "it", "that", "same", "same email", "reply", "draft")
     email_pronoun_keywords = [
         "this", "it", "that", "same", "the same", "same email", "the same email", "same one", "the same one",
         "for this", "the email", "for it", "make draft", "draft", "reply"

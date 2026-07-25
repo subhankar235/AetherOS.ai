@@ -30,6 +30,20 @@ class VoiceSessionCoordinator:
     ):
         self.stt_client = stt_client or SpeechToTextClient()
         self.tts_client = tts_client or TextToSpeechClient()
+        self._is_interrupted = False
+        self._current_task: Optional[asyncio.Task] = None
+
+    def interrupt(self) -> None:
+        """
+        Interrupts current speech/audio generation immediately when barge-in or user interruption is detected.
+        """
+        logger.info("Voice session interruption signal received. Halting speech stream immediately.")
+        self._is_interrupted = True
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+
+    def reset_interruption(self) -> None:
+        self._is_interrupted = False
 
     async def _save_and_yield_audio(
         self,
@@ -114,13 +128,20 @@ class VoiceSessionCoordinator:
         logger.info(f"Human Voice Layer rewritten response: '{rewritten_response}'")
 
         # 5. Synthesize TTS output stream
+        self.reset_interruption()
         voice_id = user.voice_profile_id or settings.ELEVENLABS_DEFAULT_VOICE_ID
         try:
             async for audio_chunk in self.tts_client.generate_speech_stream(
                 text=rewritten_response,
                 voice_id=voice_id
             ):
+                if self._is_interrupted:
+                    logger.info("Speech generation aborted mid-stream due to user interruption.")
+                    break
                 yield audio_chunk
+        except asyncio.CancelledError:
+            logger.info("Voice session speech task cancelled due to user interruption.")
+            return
         except Exception as e:
             logger.error(f"TTS execution failed in voice session coordinator: {str(e)}")
             raise

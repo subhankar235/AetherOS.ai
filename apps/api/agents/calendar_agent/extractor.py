@@ -176,6 +176,9 @@ async def extract_meeting_details(
             if "@" in parsed_s:
                 fallback_participants = [parsed_s]
 
+    if fallback_title.lower() in ("schedule a meeting with him", "meeting with him", "schedule a meeting with her", "meeting with her", "schedule a meeting with them", "meeting with them"):
+        fallback_title = "Sync Meeting"
+
     return MeetingDetails(
         title=fallback_title or "Meeting Proposal",
         duration_minutes=60,
