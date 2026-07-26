@@ -64,11 +64,7 @@ async def plan_research(
                 kwargs["base_url"] = cand["base_url"]
             llm = ChatOpenAI(**kwargs)
         else:
-            llm = ChatOpenAI(
-                model="gpt-4o-mini",
-                temperature=0.1,
-                api_key=settings.OPENAI_API_KEY,
-            )
+            raise RuntimeError("No LLM provider configured. Set OPENAI_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY in .env")
 
 
     disambiguation = await _check_ambiguity(company, context, llm)

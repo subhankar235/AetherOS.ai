@@ -14,17 +14,17 @@ def get_provider_candidates(is_classifier: bool = True) -> List[dict[str, Any]]:
     for provider in order:
         if provider in ("openrouter", "openai"):
             key = getattr(settings, "OPENAI_API_KEY", None)
-            if key and not key.startswith("sk-xxxx") and key.strip():
+            if key and key.strip():
                 model = getattr(settings, "OPENAI_MODEL_CLASSIFIER" if is_classifier else "OPENAI_MODEL_PRIMARY", "openrouter/auto")
                 candidates.append({
                     "name": "openrouter",
                     "api_key": key,
-                    "base_url": settings.openai_base_url,
+                    "base_url": settings.OPENAI_BASE_URL,
                     "model": model,
                 })
         elif provider == "groq":
             key = getattr(settings, "GROQ_API_KEY", None)
-            if key and not key.startswith("gsk_xxxx") and key.strip():
+            if key and key.strip():
                 candidates.append({
                     "name": "groq",
                     "api_key": key,
@@ -33,7 +33,7 @@ def get_provider_candidates(is_classifier: bool = True) -> List[dict[str, Any]]:
                 })
         elif provider == "gemini":
             key = getattr(settings, "GEMINI_API_KEY", None)
-            if key and not key.startswith("AIza_xxxx") and key.strip():
+            if key and key.strip():
                 candidates.append({
                     "name": "gemini",
                     "api_key": key,

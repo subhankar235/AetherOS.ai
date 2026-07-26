@@ -104,7 +104,7 @@ async def _try_tavily(
 ) -> Optional[list[dict[str, str]]]:
     """Tavily search API."""
     api_key = getattr(settings, "TAVILY_API_KEY", None) or ""
-    if not api_key or api_key.startswith("tvly-xxxx"):
+    if not api_key:
         return None
 
     try:
@@ -136,7 +136,7 @@ async def _try_brave(
 ) -> Optional[list[dict[str, str]]]:
     """Brave Search API fallback."""
     api_key = getattr(settings, "BRAVE_SEARCH_API_KEY", None) or ""
-    if not api_key or api_key.startswith("xxxx"):
+    if not api_key:
         return None
 
     try:
@@ -169,7 +169,7 @@ async def _try_serper(
 ) -> Optional[list[dict[str, str]]]:
     """Serper.dev Google Search API fallback."""
     api_key = getattr(settings, "SERPER_API_KEY", None) or ""
-    if not api_key or api_key.startswith("xxxx"):
+    if not api_key:
         return None
 
     try:
@@ -275,7 +275,7 @@ async def _try_firecrawl(
 ) -> Optional[str]:
     """Firecrawl API for targeted crawl with JS rendering and clean markdown output."""
     api_key = getattr(settings, "FIRECRAWL_API_KEY", None) or ""
-    if not api_key or api_key.startswith("fc-xxxx"):
+    if not api_key:
         return None
 
     try:
