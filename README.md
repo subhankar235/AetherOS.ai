@@ -1,12 +1,50 @@
 # Aether — AI Chief of Staff for Your Inbox
 
 <p align="center">
-  <img src="apps/web/public/logoAether.png" alt="Aether Logo" width="120"/>
+  <img src="apps/web/public/logoAether1.png" alt="Aether Logo" width="550"/>
 </p>
 
-Aether is an AI-native, multi-agent executive assistant platform that watches your inbox, triages incoming mail, drafts context-aware replies, schedules meetings, researches companies, and manages business workflows — all through a unified voice or text command interface. Every consequential action is gated behind explicit human approval.
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js"/>
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"/>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Gemini"/>
+  <img src="https://img.shields.io/badge/ElevenLabs-000000?style=for-the-badge&logo=elevenlabs&logoColor=white" alt="ElevenLabs"/>
+  <img src="https://img.shields.io/badge/Google_Cloud-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white" alt="Google Cloud"/>
+  <img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React"/>
+  <img src="https://img.shields.io/badge/Chrome-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome"/>
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL"/>
+  <img src="https://img.shields.io/badge/Qdrant-ED1C24?style=for-the-badge&logo=qdrant&logoColor=white" alt="Qdrant"/>
+  <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis"/>
+  <img src="https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langgraph&logoColor=white" alt="LangGraph"/>
+  <img src="https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white" alt="LangChain"/>
+  <img src="https://img.shields.io/badge/LangSmith-0055FF?style=for-the-badge&logo=langsmith&logoColor=white" alt="LangSmith"/>
+  <img src="https://img.shields.io/badge/Celery-37814A?style=for-the-badge&logo=celery&logoColor=white" alt="Celery"/>
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"/>
+  <img src="https://img.shields.io/badge/Clerk-6C47FF?style=for-the-badge&logo=clerk&logoColor=white" alt="Clerk"/>
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS"/>
+  <img src="https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Vercel"/>
+  <img src="https://img.shields.io/badge/Sentry-362D59?style=for-the-badge&logo=sentry&logoColor=white" alt="Sentry"/>
+  <img src="https://img.shields.io/badge/Turborepo-EF4444?style=for-the-badge&logo=turborepo&logoColor=white" alt="Turborepo"/>
+  <img src="https://img.shields.io/badge/pnpm-F69220?style=for-the-badge&logo=pnpm&logoColor=white" alt="pnpm"/>
+</p>
+
+> Aether is an AI-native, multi-agent executive assistant platform that watches your inbox, triages incoming mail, drafts context-aware replies, schedules meetings, researches companies, and manages business workflows — all through a unified voice or text command interface. Every consequential action is gated behind explicit human approval.
 
 Built for knowledge workers, founders, sales teams, and executive assistants who want the speed of AI automation without losing control.
+
+<p align="center">
+  <a href="apps/api/README.md">
+    <img src="https://img.shields.io/badge/📖_API_Docs-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Docs"/>
+  </a>
+  <a href="apps/web/README.md">
+    <img src="https://img.shields.io/badge/🌐_Web_Docs-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Web Docs"/>
+  </a>
+  <a href="apps/extension/README.md">
+    <img src="https://img.shields.io/badge/🧩_Extension_Docs-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Extension Docs"/>
+  </a>
+</p>
 
 ---
 
@@ -160,46 +198,143 @@ Built for knowledge workers, founders, sales teams, and executive assistants who
 
 ## Architecture Overview
 
+### System Architecture
+
+```mermaid
+flowchart TB
+    classDef client fill:#60a5fa,stroke:#2563eb,color:#fff
+    classDef webApp fill:#a78bfa,stroke:#7c3aed,color:#fff
+    classDef apiApp fill:#34d399,stroke:#059669,color:#000
+    classDef agent fill:#fbbf24,stroke:#d97706,color:#000
+    classDef infra fill:#f472b6,stroke:#db2777,color:#fff
+    classDef external fill:#94a3b8,stroke:#475569,color:#fff
+    classDef auth fill:#fde047,stroke:#a16207,color:#000
+
+    %% ── Clients ──
+    subgraph CLIENTS["Clients"]
+        direction LR
+        BROWSER["Web Browser"]:::client
+        EXT["Chrome Extension"]:::client
+    end
+
+    %% ── Frontend Layer ──
+    subgraph FRONTEND["Frontend – Next.js 16"]
+        WEB["Aether Web App<br/>apps/web"]:::webApp
+        WEB_COMP["Shared UI Components<br/>shadcn/ui · Tailwind 4"]:::webApp
+        WEB_STATE["State Stores<br/>TanStack Query · Zustand"]:::webApp
+    end
+
+    %% ── Backend Layer ──
+    subgraph BACKEND["Backend – FastAPI on Google Cloud Run"]
+        API["API Gateway<br/>apps/api/main.py"]:::apiApp
+        MIDDLEWARE["Middleware Stack<br/>CORS · Clerk Auth · Rate Limit · Logging"]:::apiApp
+        ROUTERS["Routers<br/>command_center · inbox · replies · calendar<br/>knowledge · research · dashboard · payments"]:::apiApp
+
+        subgraph AGENTS["LangGraph Multi-Agent System"]
+            direction LR
+            SUP["Supervisor Agent<br/>Intent · Decompose · Route"]:::agent
+            INBOX["Inbox<br/>Agent"]:::agent
+            REPLY["Reply<br/>Agent"]:::agent
+            CAL["Calendar<br/>Agent"]:::agent
+            KNOW["Knowledge<br/>Agent"]:::agent
+            RESEARCH["Research<br/>Agent"]:::agent
+            SUPP["Support<br/>Agent"]:::agent
+        end
+
+        APPROVAL["Approval Gate<br/>API-enforced · Audit Trail"]:::agent
+    end
+
+    %% ── Infrastructure ──
+    subgraph INFRA["Infrastructure – Docker Compose / Cloud"]
+        PG[("PostgreSQL<br/>Primary Store")]:::infra
+        QDRANT[("Qdrant<br/>Vector Store")]:::infra
+        REDIS[("Redis<br/>Cache · Queue · Pub/Sub")]:::infra
+        WORKERS["Celery Workers<br/>email_processor · kb_indexer<br/>research_cache_refresh"]:::infra
+    end
+
+    %% ── External Services ──
+    subgraph EXTERNAL["External Services"]
+        CLERK["Clerk<br/>Auth & Identity"]:::auth
+        GOOGLE["Google APIs<br/>Gmail · Calendar · Meet"]:::external
+        ELEVEN["ElevenLabs<br/>STT · TTS · Voice"]:::external
+        LLM["LLM Providers<br/>OpenRouter · Groq · Gemini"]:::external
+        SEARCH["Search Providers<br/>Tavily · Firecrawl · Serper"]:::external
+    end
+
+    %% ── Connections ──
+    BROWSER -->|HTTPS · REST · WebSocket| WEB
+    EXT -->|HTTPS · REST · WebSocket| WEB
+    WEB -->|REST API :8000| API
+    EXT -->|REST API :8000| API
+    API --> MIDDLEWARE
+    MIDDLEWARE --> ROUTERS
+    ROUTERS --> SUP
+    SUP --> INBOX & REPLY & CAL & KNOW & RESEARCH & SUPP
+    INBOX & REPLY & CAL & KNOW & RESEARCH & SUPP --> APPROVAL
+    APPROVAL --> PG
+    APPROVAL --> REDIS
+    AGENTS --> QDRANT
+    AGENTS --> WORKERS
+    WORKERS --> PG
+    WORKERS --> REDIS
+    WORKERS --> QDRANT
+    API -->|JWT validation| CLERK
+    AGENTS -->|REST API calls| GOOGLE
+    AGENTS -->|API calls| ELEVEN
+    AGENTS -->|LLM inference| LLM
+    AGENTS -->|Web search| SEARCH
 ```
-┌──────────────────────────────────────────────────┐
-│                  User (Voice/Text)                │
-└──────────┬───────────────────────┬───────────────┘
-           │ voice                 │ text
-           ▼                       ▼
-┌──────────────────────┐   ┌──────────────┐
-│ ElevenLabs STT       │   │ Command Bar  │
-│ (streaming)          │   │ (text input)  │
-└──────────┬───────────┘   └──────┬───────┘
-           │ transcript           │ command
-           ▼                       ▼
-┌──────────────────────────────────────────────────┐
-│              FastAPI Backend API                   │
-│  ┌────────────────────────────────────────────┐   │
-│  │       Supervisor Agent (LangGraph)          │   │
-│  │  - Intent Classification                    │   │
-│  │  - Coreference Resolution                   │   │
-│  │  - Multi-step Task Decomposition            │   │
-│  │  - Agent Orchestration                      │   │
-│  └────┬──────┬──────┬──────┬──────┬──────┬────┘   │
-│       │      │      │      │      │      │         │
-│  ┌────┴┐ ┌──┴──┐ ┌┴───┐ ┌┴───┐ ┌┴────┐ ┌┴────┐   │
-│  │Inbox│ │Reply│ │Cal │ │Know│ │Res. │ │Supp │   │
-│  │Agent│ │Agent│ │Ag. │ │Ag. │ │Ag.  │ │Ag.  │   │
-│  └─────┘ └─────┘ └────┘ └────┘ └─────┘ └─────┘   │
-│         │         │        │                       │
-│    ┌────┴─────────┴────────┴──────────┐            │
-│    │       Approval Gate              │            │
-│    │  (enforced at API layer)         │            │
-│    └──────────────────────────────────┘            │
-└──────────────────────────────────────────────────┘
-           │
-     ┌─────┼─────────┬──────────┬──────────┐
-     ▼     ▼         ▼          ▼          ▼
- ┌─────┐ ┌──────┐ ┌───────┐ ┌──────┐ ┌──────────┐
- │Gmail│ │Google│ │Qdrant │ │Redis │ │PostgreSQL│
- │ API │ │Cal/  │ │Vector │ │Cache │ │          │
- │     │ │Meet  │ │Store  │ │+Qs   │ │          │
- └─────┘ └──────┘ └───────┘ └──────┘ └──────────┘
+
+### Service Communication & Data Flow
+
+```mermaid
+flowchart LR
+    classDef web fill:#a78bfa,stroke:#7c3aed,color:#fff
+    classDef api fill:#34d399,stroke:#059669,color:#000
+    classDef data fill:#f472b6,stroke:#db2777,color:#fff
+    classDef async fill:#fbbf24,stroke:#d97706,color:#000
+    classDef svc fill:#60a5fa,stroke:#2563eb,color:#fff
+
+    %% Services
+    WEB["Next.js Web App<br/>apps/web"]:::web
+    API["FastAPI Backend<br/>apps/api"]:::api
+    PG[("PostgreSQL<br/>:5433")]:::data
+    QDRANT[("Qdrant Vector DB<br/>:6333")]:::data
+    REDIS[("Redis<br/>:6379")]:::async
+    CELERY["Celery Workers"]:::async
+    WS["WebSocket Server<br/>/ws"]:::async
+
+    %% External
+    CLERK["Clerk Auth"]:::svc
+    GOOGLE["Google APIs"]:::svc
+    LLM["LLM Providers"]:::svc
+    ELEVEN["ElevenLabs"]:::svc
+
+    %% ── Request Path (REST) ──
+    WEB == "REST :8000" ==> API
+    API -->|SQLAlchemy| PG
+    API -->|Redis Cache| REDIS
+    API -->|Qdrant Client| QDRANT
+    API -->|Celery Task Queue| REDIS
+    REDIS -->|Celery Worker| CELERY
+    CELERY -->|Read/Write| PG
+    CELERY -->|Read/Write| QDRANT
+
+    %% ── WebSocket (real-time) ──
+    WEB <==>|WebSocket :8000/ws| WS
+    WS -.->|broadcast| WEB
+    API -.->|publish| WS
+
+    %% ── External ──
+    API -->|JWT Verify| CLERK
+    API -->|OAuth 2.0| GOOGLE
+    API -->|OpenAI SDK| LLM
+    API -->|REST| ELEVEN
+
+    %% ── Edge / Cache Flow ──
+    PG ---|"Row-Level Security"| API
+    QDRANT ---|"per-org access filter"| API
+    REDIS ---|"session · rate-limit · pub/sub"| API
 ```
 
 ### Request Flow
@@ -227,7 +362,7 @@ Everything else requires an explicit user command.
 ```
 aether/
 ├── apps/
-│   ├── api/                      # FastAPI backend
+│   ├── api/                      # FastAPI backend → [Detailed API docs](apps/api/README.md)
 │   │   ├── agents/               # LangGraph multi-agent system
 │   │   │   ├── supervisor/       # Intent router, context manager, task decomposer
 │   │   │   ├── inbox_agent/      # Email sync, search, reader
@@ -248,7 +383,7 @@ aether/
 │   │   ├── websocket/            # Connection manager, event broadcasting
 │   │   └── workers/              # Celery background tasks
 │   │
-│   ├── web/                      # Next.js 16 frontend
+│   ├── web/                      # Next.js 16 frontend → [Detailed frontend docs](apps/web/README.md)
 │   │   ├── app/                  # App Router pages
 │   │   │   ├── (app)/dashboard/  # Inbox overview with live stats
 │   │   │   ├── (app)/inbox/      # Email list and detail view
@@ -269,7 +404,7 @@ aether/
 │   │   ├── stores/               # Zustand state stores
 │   │   └── lib/                  # API client, mock data, utilities
 │   │
-│   └── extension/                # Chrome Extension (MV3)
+│   └── extension/                # Chrome Extension (MV3) → [Extension docs](apps/extension/README.md)
 │       ├── src/
 │       │   ├── background/       # Service worker
 │       │   ├── sidepanel/        # React side panel UI
@@ -786,8 +921,8 @@ This project is licensed under the terms specified in the repository. See the LI
 <div align="center">
   <p><strong>Aether</strong> — Your inbox, autonomously refined.</p>
   <p>
-    <a href="https://github.com/anomalyco/opencode/issues">Report a bug</a>
+    <a href="https://github.com/subhankar235/Aether">Report a bug</a>
     ·
-    <a href="https://github.com/anomalyco/opencode/issues">Request a feature</a>
+    <a href="https://github.com/subhankar235/Aether">Request a feature</a>
   </p>
 </div>
